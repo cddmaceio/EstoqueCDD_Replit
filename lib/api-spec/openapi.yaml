@@ -3,13 +3,19 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: API specification for Gestão Estoque CDD Maceió
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: auth
+    description: Authentication operations
+  - name: estoque
+    description: Estoque (stock) operations
+  - name: upload
+    description: File upload operations
 paths:
   /healthz:
     get:
@@ -24,6 +30,195 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+
+  /auth/login:
+    post:
+      operationId: adminLogin
+      tags: [auth]
+      summary: Admin login
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginBody"
+      responses:
+        "200":
+          description: Login successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LoginResponse"
+        "401":
+          description: Invalid credentials
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /auth/logout:
+    post:
+      operationId: adminLogout
+      tags: [auth]
+      summary: Admin logout
+      responses:
+        "200":
+          description: Logged out
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+
+  /auth/me:
+    get:
+      operationId: getAuthMe
+      tags: [auth]
+      summary: Get current admin session
+      responses:
+        "200":
+          description: Current admin info
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AdminUser"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /estoque:
+    get:
+      operationId: getEstoque
+      tags: [estoque]
+      summary: Get stock items (public)
+      parameters:
+        - name: search
+          in: query
+          schema:
+            type: string
+        - name: marca
+          in: query
+          schema:
+            type: string
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [OK, NOK]
+        - name: curva
+          in: query
+          schema:
+            type: string
+            enum: [A, B, C]
+        - name: page
+          in: query
+          schema:
+            type: integer
+            default: 1
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+      responses:
+        "200":
+          description: List of stock items
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EstoqueListResponse"
+
+  /estoque/dashboard:
+    get:
+      operationId: getEstoqueDashboard
+      tags: [estoque]
+      summary: Get dashboard KPIs and charts (admin)
+      responses:
+        "200":
+          description: Dashboard data
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DashboardData"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /estoque/marcas:
+    get:
+      operationId: getEstoqueMarcas
+      tags: [estoque]
+      summary: Get list of all unique brands in current snapshot
+      responses:
+        "200":
+          description: List of brands
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  marcas:
+                    type: array
+                    items:
+                      type: string
+                required:
+                  - marcas
+
+  /estoque/upload-status:
+    get:
+      operationId: getEstoqueUploadStatus
+      tags: [upload]
+      summary: Get last upload status (admin)
+      responses:
+        "200":
+          description: Upload status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadStatus"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /estoque/upload:
+    post:
+      operationId: uploadEstoque
+      tags: [upload]
+      summary: Upload stock spreadsheet (admin)
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UploadEstoqueBody"
+      responses:
+        "200":
+          description: Upload successful
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UploadResult"
+        "400":
+          description: Bad request
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "401":
+          description: Unauthorized
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
 components:
   schemas:
     HealthStatus:
@@ -34,3 +229,210 @@ components:
       required:
         - status
 
+    LoginBody:
+      type: object
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          type: string
+      required:
+        - email
+        - password
+
+    LoginResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+        user:
+          $ref: "#/components/schemas/AdminUser"
+      required:
+        - success
+        - user
+
+    AdminUser:
+      type: object
+      properties:
+        id:
+          type: integer
+        email:
+          type: string
+        name:
+          type: string
+      required:
+        - id
+        - email
+        - name
+
+    SuccessResponse:
+      type: object
+      properties:
+        success:
+          type: boolean
+      required:
+        - success
+
+    ErrorResponse:
+      type: object
+      properties:
+        error:
+          type: string
+      required:
+        - error
+
+    EstoqueItem:
+      type: object
+      properties:
+        id:
+          type: integer
+        produto:
+          type: string
+        marca:
+          type: string
+        embalagem:
+          type: string
+        doi:
+          type: number
+        status:
+          type: string
+          enum: [OK, NOK]
+        demanda:
+          type: number
+        min:
+          type: number
+        max:
+          type: number
+        curva:
+          type: string
+          enum: [A, B, C]
+      required:
+        - id
+        - produto
+        - marca
+        - embalagem
+        - doi
+        - status
+        - demanda
+        - min
+        - max
+        - curva
+
+    EstoqueListResponse:
+      type: object
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/EstoqueItem"
+        total:
+          type: integer
+        page:
+          type: integer
+        limit:
+          type: integer
+        totalPages:
+          type: integer
+      required:
+        - items
+        - total
+        - page
+        - limit
+        - totalPages
+
+    DashboardData:
+      type: object
+      properties:
+        totalSKUs:
+          type: integer
+        percentOK:
+          type: number
+        percentNOK:
+          type: number
+        mediaDOI:
+          type: number
+        distribuicaoStatus:
+          type: array
+          items:
+            type: object
+            properties:
+              name:
+                type: string
+              value:
+                type: integer
+            required:
+              - name
+              - value
+        produtosPorMarca:
+          type: array
+          items:
+            type: object
+            properties:
+              marca:
+                type: string
+              total:
+                type: integer
+              curva:
+                type: string
+            required:
+              - marca
+              - total
+              - curva
+        snapshotDate:
+          type: string
+          nullable: true
+      required:
+        - totalSKUs
+        - percentOK
+        - percentNOK
+        - mediaDOI
+        - distribuicaoStatus
+        - produtosPorMarca
+        - snapshotDate
+
+    UploadStatus:
+      type: object
+      properties:
+        fileName:
+          type: string
+          nullable: true
+        uploadedAt:
+          type: string
+          nullable: true
+        totalRows:
+          type: integer
+          nullable: true
+      required:
+        - fileName
+        - uploadedAt
+        - totalRows
+
+    UploadEstoqueBody:
+      type: object
+      properties:
+        fileName:
+          type: string
+        fileBase64:
+          type: string
+          description: Base64 encoded file content
+      required:
+        - fileName
+        - fileBase64
+
+    UploadResult:
+      type: object
+      properties:
+        success:
+          type: boolean
+        message:
+          type: string
+        rowsProcessed:
+          type: integer
+        fileName:
+          type: string
+      required:
+        - success
+        - message
+        - rowsProcessed
+        - fileName
