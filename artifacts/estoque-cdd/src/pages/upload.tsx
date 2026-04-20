@@ -1,208 +1,160 @@
-import { useState, useCallback } from "react";
+import { useState, useEffect } from "react";
 import { useUploadEstoque, useGetEstoqueUploadStatus } from "@workspace/api-client-react";
 import { AdminLayout } from "@/components/layout/admin-layout";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { UploadCloud, FileType, CheckCircle2, AlertCircle, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
-import { format } from "date-fns";
-import { ptBR } from "date-fns/locale";
+import { UploadCard, type UploadStatus } from "@/components/upload-card";
+import { Separator } from "@/components/ui/separator";
+
+const BASE_URL = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
+
+function useBaseUpload(endpoint: string) {
+  const [isUploading, setIsUploading] = useState(false);
+  const [status, setStatus] = useState<UploadStatus | undefined>(undefined);
+  const [isStatusLoading, setIsStatusLoading] = useState(true);
+  const { toast } = useToast();
+
+  const fetchStatus = async () => {
+    setIsStatusLoading(true);
+    try {
+      const res = await fetch(`${BASE_URL}/api/bases/${endpoint}/status`, { credentials: "include" });
+      if (res.ok) setStatus(await res.json());
+    } catch {}
+    setIsStatusLoading(false);
+  };
+
+  const upload = async (fileName: string, fileBase64: string) => {
+    setIsUploading(true);
+    try {
+      const res = await fetch(`${BASE_URL}/api/bases/${endpoint}/upload`, {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName, fileBase64 }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        toast({ title: "Upload concluído", description: `${data.rowsProcessed} registros importados com sucesso.` });
+        fetchStatus();
+      } else {
+        toast({ variant: "destructive", title: "Erro no upload", description: data.error ?? "Falha ao processar o arquivo." });
+      }
+    } catch {
+      toast({ variant: "destructive", title: "Erro de conexão", description: "Não foi possível conectar ao servidor." });
+    }
+    setIsUploading(false);
+  };
+
+  return { isUploading, status, isStatusLoading, upload, fetchStatus };
+}
+
+function BaseSection({ endpoint, title, description }: { endpoint: string; title: string; description: string }) {
+  const { isUploading, status, isStatusLoading, upload, fetchStatus } = useBaseUpload(endpoint);
+  useEffect(() => { fetchStatus(); }, []);
+  return (
+    <UploadCard
+      title={title}
+      description={description}
+      status={status}
+      isStatusLoading={isStatusLoading}
+      isUploading={isUploading}
+      onUpload={upload}
+      onRefetch={fetchStatus}
+    />
+  );
+}
 
 export default function Upload() {
   const { toast } = useToast();
-  const [dragActive, setDragActive] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
 
-  const { data: status, refetch: refetchStatus } = useGetEstoqueUploadStatus();
-  
-  const uploadMutation = useUploadEstoque({
+  const { data: estoqueStatus, isLoading: estoqueStatusLoading, refetch: refetchEstoqueStatus } = useGetEstoqueUploadStatus();
+  const uploadEstoque = useUploadEstoque({
     mutation: {
       onSuccess: (data) => {
-        toast({
-          title: "Upload concluído",
-          description: `${data.rowsProcessed} registros processados com sucesso.`,
-        });
-        setSelectedFile(null);
-        refetchStatus();
+        toast({ title: "Upload concluído", description: `${data.rowsProcessed} registros processados.` });
+        refetchEstoqueStatus();
       },
       onError: () => {
-        toast({
-          variant: "destructive",
-          title: "Erro no upload",
-          description: "Não foi possível processar o arquivo. Verifique o formato.",
-        });
-      }
-    }
+        toast({ variant: "destructive", title: "Erro no upload", description: "Não foi possível processar o arquivo." });
+      },
+    },
   });
 
-  const handleDrag = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    if (e.type === "dragenter" || e.type === "dragover") {
-      setDragActive(true);
-    } else if (e.type === "dragleave") {
-      setDragActive(false);
-    }
-  }, []);
-
-  const handleDrop = useCallback((e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleFile(e.dataTransfer.files[0]);
-    }
-  }, []);
-
-  const handleChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    e.preventDefault();
-    if (e.target.files && e.target.files[0]) {
-      handleFile(e.target.files[0]);
-    }
-  }, []);
-
-  const handleFile = (file: File) => {
-    if (file.name.endsWith('.csv') || file.name.endsWith('.xlsx')) {
-      setSelectedFile(file);
-    } else {
-      toast({
-        variant: "destructive",
-        title: "Arquivo inválido",
-        description: "Apenas arquivos .csv ou .xlsx são permitidos.",
-      });
-    }
-  };
-
-  const handleUpload = () => {
-    if (!selectedFile) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target?.result?.toString().split(',')[1];
-      if (base64) {
-        uploadMutation.mutate({
-          data: {
-            fileName: selectedFile.name,
-            fileBase64: base64
-          }
-        });
-      }
-    };
-    reader.readAsDataURL(selectedFile);
+  const handleEstoqueUpload = (fileName: string, fileBase64: string) => {
+    uploadEstoque.mutate({ data: { fileName, fileBase64 } });
   };
 
   return (
     <AdminLayout>
-      <div className="space-y-6 max-w-4xl mx-auto">
+      <div className="space-y-8 max-w-7xl mx-auto">
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Gestão de Dados</h1>
-          <p className="text-muted-foreground">Atualize a base de estoque do CDD através de planilhas.</p>
+          <p className="text-muted-foreground">
+            Atualize as bases do CDD Maceió. Cada seção corresponde a um tipo de arquivo do sistema logístico.
+          </p>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-3">
-          <Card className="md:col-span-2">
-            <CardHeader>
-              <CardTitle>Nova Carga de Estoque</CardTitle>
-              <CardDescription>Faça upload de um arquivo .csv ou .xlsx atualizado do sistema logístico.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div 
-                className={`border-2 border-dashed rounded-lg p-10 flex flex-col items-center justify-center transition-colors ${
-                  dragActive ? 'border-primary bg-primary/5' : 'border-muted-foreground/25 hover:border-primary/50'
-                }`}
-                onDragEnter={handleDrag}
-                onDragLeave={handleDrag}
-                onDragOver={handleDrag}
-                onDrop={handleDrop}
-              >
-                {!selectedFile ? (
-                  <>
-                    <div className="h-14 w-14 bg-muted rounded-full flex items-center justify-center mb-4 text-muted-foreground">
-                      <UploadCloud className="h-7 w-7" />
-                    </div>
-                    <p className="mb-2 text-sm font-medium">Arraste e solte seu arquivo aqui</p>
-                    <p className="text-xs text-muted-foreground mb-6">Suporta .csv e .xlsx até 10MB</p>
-                    
-                    <Button variant="outline" onClick={() => document.getElementById('file-upload')?.click()}>
-                      Procurar arquivo
-                    </Button>
-                    <input 
-                      id="file-upload" 
-                      type="file" 
-                      className="hidden" 
-                      accept=".csv, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" 
-                      onChange={handleChange}
-                    />
-                  </>
-                ) : (
-                  <div className="w-full flex flex-col items-center text-center">
-                    <FileType className="h-12 w-12 text-primary mb-4" />
-                    <p className="font-medium text-sm mb-1 truncate max-w-[300px]">{selectedFile.name}</p>
-                    <p className="text-xs text-muted-foreground mb-6">
-                      {(selectedFile.size / 1024 / 1024).toFixed(2)} MB
-                    </p>
-                    <div className="flex gap-3">
-                      <Button variant="outline" size="sm" onClick={() => setSelectedFile(null)}>
-                        Cancelar
-                      </Button>
-                      <Button size="sm" onClick={handleUpload} disabled={uploadMutation.isPending}>
-                        {uploadMutation.isPending ? (
-                          <><Loader2 className="h-4 w-4 mr-2 animate-spin" /> Processando...</>
-                        ) : (
-                          "Iniciar Upload"
-                        )}
-                      </Button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
+        <div>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="h-2 w-2 rounded-full bg-primary" />
+            <h2 className="text-base font-semibold">Base Estoque (Consulta Pública)</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <UploadCard
+              title="base_estoque"
+              description="Snapshot principal do estoque para a consulta pública. Substitui o snapshot anterior ao importar."
+              status={estoqueStatus ? { fileName: estoqueStatus.fileName ?? null, uploadedAt: estoqueStatus.uploadedAt ?? null, totalRows: estoqueStatus.totalRows ?? null } : undefined}
+              isStatusLoading={estoqueStatusLoading}
+              isUploading={uploadEstoque.isPending}
+              onUpload={handleEstoqueUpload}
+              onRefetch={() => refetchEstoqueStatus()}
+            />
+          </div>
+        </div>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>Status Atual</CardTitle>
-              <CardDescription>Última atualização</CardDescription>
-            </CardHeader>
-            <CardContent>
-              {status ? (
-                status.uploadedAt ? (
-                  <div className="space-y-4">
-                    <div className="flex items-center gap-2 text-emerald-600">
-                      <CheckCircle2 className="h-5 w-5" />
-                      <span className="font-medium">Base Atualizada</span>
-                    </div>
-                    <div className="space-y-2 text-sm">
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Arquivo:</span>
-                        <span className="font-medium truncate max-w-[120px]">{status.fileName}</span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Data:</span>
-                        <span className="font-medium">
-                          {format(new Date(status.uploadedAt), "dd/MM/yyyy HH:mm", { locale: ptBR })}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Registros:</span>
-                        <span className="font-medium">{status.totalRows?.toLocaleString('pt-BR')} SKUs</span>
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center text-center py-6">
-                    <AlertCircle className="h-10 w-10 text-muted-foreground mb-3" />
-                    <p className="text-sm font-medium">Nenhum dado carregado</p>
-                    <p className="text-xs text-muted-foreground mt-1">Faça o upload do primeiro arquivo.</p>
-                  </div>
-                )
-              ) : (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                </div>
-              )}
-            </CardContent>
-          </Card>
+        <Separator />
+
+        <div>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="h-2 w-2 rounded-full bg-blue-500" />
+            <h2 className="text-base font-semibold">Bases do Sistema Logístico</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <BaseSection
+              endpoint="grade"
+              title="base_grade"
+              description="Grade de estoque por produto. Colunas: CodigoProduto, DescricaoProduto, UnidadeMedida, GradeEstoque, GradeCadastrada, Reserva, Saida, SaldoDisponivel."
+            />
+            <BaseSection
+              endpoint="0111"
+              title="base_0111"
+              description="Cadastro mestre de produtos. Colunas: Código, Descrição, Marca, Embalagem, NCM, EAN, Fator, PGV e demais campos de produto."
+            />
+            <BaseSection
+              endpoint="agendados"
+              title="base_agendados"
+              description="Pedidos agendados com itens. Colunas: Número pedido, Cliente, Produto, Situação, Valor, Vendedor, Município, NF e demais campos de pedido."
+            />
+            <BaseSection
+              endpoint="exemplo"
+              title="base_exemplo"
+              description="Cadastro de colaboradores e ajudantes. Colunas: Id Promax, Nome, CPF, Crachá, Setor, Turno, Prestador, Metas de Pallet."
+            />
+            <BaseSection
+              endpoint="020501"
+              title="base_020501"
+              description="Movimentação de estoque (Relatório 020501). Colunas: Data, Documento, Item, Depósito, Operação, Entradas, Saídas, Turno, Histórico."
+            />
+            <BaseSection
+              endpoint="020502"
+              title="base_020502"
+              description="Saldo de estoque por depósito (Relatório 020502). Colunas: Armazem, Depósito, Produto, Saldos, Entradas, Saídas, Disponível, Grade Real."
+            />
+            <BaseSection
+              endpoint="producao"
+              title="base_producao"
+              description="Produção T1 (arquivo .xlsx). Colunas: Date, DescricaoUnidade, CodSAP, DescrProdAbreviada, Embalagem, Fator RA24."
+            />
+          </div>
         </div>
       </div>
     </AdminLayout>

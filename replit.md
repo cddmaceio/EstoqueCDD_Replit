@@ -48,11 +48,28 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 - `GET /api/estoque/dashboard` — Dashboard KPIs (admin only)
 - `GET /api/estoque/upload-status` — Last upload info (admin only)
 - `POST /api/estoque/upload` — Upload base64 xlsx/csv (admin only)
+- `POST/GET /api/bases/grade/*` — base_grade upload & status
+- `POST/GET /api/bases/0111/*` — base_0111 upload & status
+- `POST/GET /api/bases/agendados/*` — base_agendados upload & status
+- `POST/GET /api/bases/exemplo/*` — base_exemplo upload & status
+- `POST/GET /api/bases/020501/*` — base_020501 upload & status
+- `POST/GET /api/bases/020502/*` — base_020502 upload & status
+- `POST/GET /api/bases/producao/*` — base_producao upload & status
 
-**DB Schema (in `lib/db/src/schema/estoque.ts`):**
-- `admin_users` — Admin credentials (password hashed with SHA-256 + salt)
-- `upload_snapshots` — Metadata about each uploaded file
-- `estoque_items` — Stock line items linked to snapshots
+**DB Schema:**
+- `lib/db/src/schema/estoque.ts` — admin_users, upload_snapshots, estoque_items
+- `lib/db/src/schema/base_grade.ts` — base_grade_snapshots, base_grade (CodigoProduto, Grade, Reserva, Saida, SaldoDisponivel)
+- `lib/db/src/schema/base_0111.ts` — base_0111_snapshots, base_0111 (Código, Descrição, Marca, Embalagem, NCM, EAN, Fator...)
+- `lib/db/src/schema/base_agendados.ts` — base_agendados_snapshots, base_agendados (Pedido, Cliente, Produto, Situação, NF...)
+- `lib/db/src/schema/base_exemplo.ts` — base_exemplo_snapshots, base_exemplo (Colaboradores: CPF, Crachá, Setor, Turno...)
+- `lib/db/src/schema/base_020501.ts` — base_020501_snapshots, base_020501 (Movimentação: Data, Doc, Item, Entradas, Saídas...)
+- `lib/db/src/schema/base_020502.ts` — base_020502_snapshots, base_020502 (Saldo por Depósito: Armazém, Produto, Saldos...)
+- `lib/db/src/schema/base_producao.ts` — base_producao_snapshots, base_producao (Date, CodSAP, Embalagem, Fator RA24)
+
+**File encoding notes:**
+- Grade, Agendados: UTF-8 BOM; separator: semicolon
+- 0111, exemplo, 020501, 020502: ISO-8859-1; separator: semicolon (xlsx codepage 28591 handles this)
+- Produção: .xlsx (Microsoft Excel)
 
 ## Important Notes
 
