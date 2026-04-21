@@ -1,4 +1,5 @@
 import { Router, type IRouter } from "express";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { getDb } from "@workspace/db";
 import {
   baseGradeSnapshotsTable,
@@ -17,13 +18,72 @@ import {
   baseProducaoTable,
   produtoSegmentoTable,
 } from "@workspace/db";
-import { desc, sql } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 import * as XLSX from "xlsx";
-import { requireAdmin } from "../lib/admin-auth";
 import { readUploadedFileBuffer } from "../lib/upload-storage";
 
 const router: IRouter = Router();
 const BATCH_SIZE = 500;
+
+type SnapshotStatus = {
+  file_name: string;
+  uploaded_at: string;
+  total_rows: number;
+};
+
+let supabaseClient: SupabaseClient | null = null;
+
+function getSupabaseReadClient(): SupabaseClient {
+  if (supabaseClient) {
+    return supabaseClient;
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error(
+      "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY (ou SUPABASE_ANON_KEY) sao obrigatorios para as rotas de bases.",
+    );
+  }
+
+  supabaseClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+
+  return supabaseClient;
+}
+
+async function getLatestStatus(
+  table: string,
+): Promise<{ fileName: string | null; uploadedAt: string | null; totalRows: number | null }> {
+  const { data, error } = await getSupabaseReadClient()
+    .from(table)
+    .select("file_name, uploaded_at, total_rows")
+    .order("uploaded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  const row = (data as SnapshotStatus | null) ?? null;
+
+  if (!row) {
+    return { fileName: null, uploadedAt: null, totalRows: null };
+  }
+
+  return {
+    fileName: row.file_name,
+    uploadedAt: row.uploaded_at,
+    totalRows: row.total_rows,
+  };
+}
 
 function parseFloat0(v: unknown): number {
   if (v == null) return 0;
@@ -56,7 +116,10 @@ async function readWorkbook(input: {
 function getRows(wb: XLSX.WorkBook): Record<string, unknown>[] {
   const sheetName = wb.SheetNames[0];
   if (!sheetName) return [];
-  return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" }) as Record<string, unknown>[];
+  return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" }) as Record<
+    string,
+    unknown
+  >[];
 }
 
 function getRowsFromAllSheets(
@@ -66,7 +129,10 @@ function getRowsFromAllSheets(
     const sheet = wb.Sheets[sheetName];
     if (!sheet) return [];
 
-    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as Record<string, unknown>[];
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as Record<
+      string,
+      unknown
+    >[];
 
     return rows.map((row) => ({ sheetName, row }));
   });
@@ -89,15 +155,33 @@ function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
 }
 
 router.post("/bases/grade/upload", async (req, res): Promise<void> => {
-  
   const db = getDb();
-  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
-  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
+    fileName?: string;
+    fileBase64?: string;
+    storagePath?: string;
+    storageBucket?: string;
+  };
+  if (!fileName || (!fileBase64 && !storagePath)) {
+    res.status(400).json({ error: "fileName e fileBase64 obrigatorios" });
+    return;
+  }
   let wb: XLSX.WorkBook;
-  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try {
+    wb = await readWorkbook({ fileBase64, storagePath, storageBucket });
+  } catch {
+    res.status(400).json({ error: "Arquivo invalido" });
+    return;
+  }
   const rows = getRows(wb);
-  if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
-  const [snapshot] = await db.insert(baseGradeSnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
+  if (!rows.length) {
+    res.status(400).json({ error: "Planilha sem dados" });
+    return;
+  }
+  const [snapshot] = await db
+    .insert(baseGradeSnapshotsTable)
+    .values({ fileName, totalRows: rows.length })
+    .returning();
   const items = rows.map((r) => {
     const n = normalizeRow(r);
     return {
@@ -115,26 +199,51 @@ router.post("/bases/grade/upload", async (req, res): Promise<void> => {
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     await db.insert(baseGradeTable).values(items.slice(i, i + BATCH_SIZE));
   }
-  res.json({ success: true, message: `${items.length} itens importados`, rowsProcessed: items.length, fileName });
+  res.json({
+    success: true,
+    message: `${items.length} itens importados`,
+    rowsProcessed: items.length,
+    fileName,
+  });
 });
 
 router.get("/bases/grade/status", async (req, res): Promise<void> => {
-  
-  const db = getDb();
-  const [s] = await db.select().from(baseGradeSnapshotsTable).orderBy(desc(baseGradeSnapshotsTable.uploadedAt)).limit(1);
-  res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
+  try {
+    res.json(await getLatestStatus("base_grade_snapshots"));
+  } catch (error) {
+    req.log.error({ error }, "bases grade status failed");
+    res.status(500).json({ error: "Falha ao carregar status da base grade" });
+  }
 });
 
 router.post("/bases/0111/upload", async (req, res): Promise<void> => {
-  
   const db = getDb();
-  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
-  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
+    fileName?: string;
+    fileBase64?: string;
+    storagePath?: string;
+    storageBucket?: string;
+  };
+  if (!fileName || (!fileBase64 && !storagePath)) {
+    res.status(400).json({ error: "fileName e fileBase64 obrigatorios" });
+    return;
+  }
   let wb: XLSX.WorkBook;
-  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try {
+    wb = await readWorkbook({ fileBase64, storagePath, storageBucket });
+  } catch {
+    res.status(400).json({ error: "Arquivo invalido" });
+    return;
+  }
   const rows = getRows(wb);
-  if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
-  const [snapshot] = await db.insert(base0111SnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
+  if (!rows.length) {
+    res.status(400).json({ error: "Planilha sem dados" });
+    return;
+  }
+  const [snapshot] = await db
+    .insert(base0111SnapshotsTable)
+    .values({ fileName, totalRows: rows.length })
+    .returning();
   const items = rows.map((r) => {
     const n = normalizeRow(r);
     return {
@@ -178,26 +287,51 @@ router.post("/bases/0111/upload", async (req, res): Promise<void> => {
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     await db.insert(base0111Table).values(items.slice(i, i + BATCH_SIZE));
   }
-  res.json({ success: true, message: `${items.length} itens importados`, rowsProcessed: items.length, fileName });
+  res.json({
+    success: true,
+    message: `${items.length} itens importados`,
+    rowsProcessed: items.length,
+    fileName,
+  });
 });
 
 router.get("/bases/0111/status", async (req, res): Promise<void> => {
-  
-  const db = getDb();
-  const [s] = await db.select().from(base0111SnapshotsTable).orderBy(desc(base0111SnapshotsTable.uploadedAt)).limit(1);
-  res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
+  try {
+    res.json(await getLatestStatus("base_0111_snapshots"));
+  } catch (error) {
+    req.log.error({ error }, "bases 0111 status failed");
+    res.status(500).json({ error: "Falha ao carregar status da base 0111" });
+  }
 });
 
 router.post("/bases/agendados/upload", async (req, res): Promise<void> => {
-  
   const db = getDb();
-  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
-  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
+    fileName?: string;
+    fileBase64?: string;
+    storagePath?: string;
+    storageBucket?: string;
+  };
+  if (!fileName || (!fileBase64 && !storagePath)) {
+    res.status(400).json({ error: "fileName e fileBase64 obrigatorios" });
+    return;
+  }
   let wb: XLSX.WorkBook;
-  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try {
+    wb = await readWorkbook({ fileBase64, storagePath, storageBucket });
+  } catch {
+    res.status(400).json({ error: "Arquivo invalido" });
+    return;
+  }
   const rows = getRows(wb);
-  if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
-  const [snapshot] = await db.insert(baseAgendadosSnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
+  if (!rows.length) {
+    res.status(400).json({ error: "Planilha sem dados" });
+    return;
+  }
+  const [snapshot] = await db
+    .insert(baseAgendadosSnapshotsTable)
+    .values({ fileName, totalRows: rows.length })
+    .returning();
   const items = rows.map((r) => {
     const n = normalizeRow(r);
     return {
@@ -217,7 +351,9 @@ router.post("/bases/agendados/upload", async (req, res): Promise<void> => {
       idPedido: str(n["idpedido"] ?? n["iddo pedido"]),
       situacaoPedido: str(n["situacaopedido"]),
       situacaoAtendPedido: str(n["situacaoatendpedido"]),
-      dataUltimaModificacao: str(n["dataultmamodificacao"] ?? n["dataultima modificacao"]),
+      dataUltimaModificacao: str(
+        n["dataultmamodificacao"] ?? n["dataultima modificacao"],
+      ),
       dataHoraCancelamento: str(n["datahoracancelamento"]),
       motivoCancelamento: str(n["motivocancelamento"]),
       dataEntrada: str(n["dataentrada"]),
@@ -254,26 +390,51 @@ router.post("/bases/agendados/upload", async (req, res): Promise<void> => {
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     await db.insert(baseAgendadosTable).values(items.slice(i, i + BATCH_SIZE));
   }
-  res.json({ success: true, message: `${items.length} itens importados`, rowsProcessed: items.length, fileName });
+  res.json({
+    success: true,
+    message: `${items.length} itens importados`,
+    rowsProcessed: items.length,
+    fileName,
+  });
 });
 
 router.get("/bases/agendados/status", async (req, res): Promise<void> => {
-  
-  const db = getDb();
-  const [s] = await db.select().from(baseAgendadosSnapshotsTable).orderBy(desc(baseAgendadosSnapshotsTable.uploadedAt)).limit(1);
-  res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
+  try {
+    res.json(await getLatestStatus("base_agendados_snapshots"));
+  } catch (error) {
+    req.log.error({ error }, "bases agendados status failed");
+    res.status(500).json({ error: "Falha ao carregar status da base agendados" });
+  }
 });
 
 router.post("/bases/exemplo/upload", async (req, res): Promise<void> => {
-  
   const db = getDb();
-  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
-  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
+    fileName?: string;
+    fileBase64?: string;
+    storagePath?: string;
+    storageBucket?: string;
+  };
+  if (!fileName || (!fileBase64 && !storagePath)) {
+    res.status(400).json({ error: "fileName e fileBase64 obrigatorios" });
+    return;
+  }
   let wb: XLSX.WorkBook;
-  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try {
+    wb = await readWorkbook({ fileBase64, storagePath, storageBucket });
+  } catch {
+    res.status(400).json({ error: "Arquivo invalido" });
+    return;
+  }
   const rows = getRows(wb);
-  if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
-  const [snapshot] = await db.insert(baseExemploSnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
+  if (!rows.length) {
+    res.status(400).json({ error: "Planilha sem dados" });
+    return;
+  }
+  const [snapshot] = await db
+    .insert(baseExemploSnapshotsTable)
+    .values({ fileName, totalRows: rows.length })
+    .returning();
   const items = rows.map((r) => {
     const n = normalizeRow(r);
     return {
@@ -297,26 +458,51 @@ router.post("/bases/exemplo/upload", async (req, res): Promise<void> => {
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     await db.insert(baseExemploTable).values(items.slice(i, i + BATCH_SIZE));
   }
-  res.json({ success: true, message: `${items.length} itens importados`, rowsProcessed: items.length, fileName });
+  res.json({
+    success: true,
+    message: `${items.length} itens importados`,
+    rowsProcessed: items.length,
+    fileName,
+  });
 });
 
 router.get("/bases/exemplo/status", async (req, res): Promise<void> => {
-  
-  const db = getDb();
-  const [s] = await db.select().from(baseExemploSnapshotsTable).orderBy(desc(baseExemploSnapshotsTable.uploadedAt)).limit(1);
-  res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
+  try {
+    res.json(await getLatestStatus("base_exemplo_snapshots"));
+  } catch (error) {
+    req.log.error({ error }, "bases exemplo status failed");
+    res.status(500).json({ error: "Falha ao carregar status da base exemplo" });
+  }
 });
 
 router.post("/bases/020501/upload", async (req, res): Promise<void> => {
-  
   const db = getDb();
-  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
-  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
+    fileName?: string;
+    fileBase64?: string;
+    storagePath?: string;
+    storageBucket?: string;
+  };
+  if (!fileName || (!fileBase64 && !storagePath)) {
+    res.status(400).json({ error: "fileName e fileBase64 obrigatorios" });
+    return;
+  }
   let wb: XLSX.WorkBook;
-  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try {
+    wb = await readWorkbook({ fileBase64, storagePath, storageBucket });
+  } catch {
+    res.status(400).json({ error: "Arquivo invalido" });
+    return;
+  }
   const rows = getRows(wb);
-  if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
-  const [snapshot] = await db.insert(base020501SnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
+  if (!rows.length) {
+    res.status(400).json({ error: "Planilha sem dados" });
+    return;
+  }
+  const [snapshot] = await db
+    .insert(base020501SnapshotsTable)
+    .values({ fileName, totalRows: rows.length })
+    .returning();
   const items = rows.map((r) => {
     const n = normalizeRow(r);
     return {
@@ -362,26 +548,51 @@ router.post("/bases/020501/upload", async (req, res): Promise<void> => {
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     await db.insert(base020501Table).values(items.slice(i, i + BATCH_SIZE));
   }
-  res.json({ success: true, message: `${items.length} itens importados`, rowsProcessed: items.length, fileName });
+  res.json({
+    success: true,
+    message: `${items.length} itens importados`,
+    rowsProcessed: items.length,
+    fileName,
+  });
 });
 
 router.get("/bases/020501/status", async (req, res): Promise<void> => {
-  
-  const db = getDb();
-  const [s] = await db.select().from(base020501SnapshotsTable).orderBy(desc(base020501SnapshotsTable.uploadedAt)).limit(1);
-  res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
+  try {
+    res.json(await getLatestStatus("base_020501_snapshots"));
+  } catch (error) {
+    req.log.error({ error }, "bases 020501 status failed");
+    res.status(500).json({ error: "Falha ao carregar status da base 020501" });
+  }
 });
 
 router.post("/bases/020502/upload", async (req, res): Promise<void> => {
-  
   const db = getDb();
-  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
-  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
+    fileName?: string;
+    fileBase64?: string;
+    storagePath?: string;
+    storageBucket?: string;
+  };
+  if (!fileName || (!fileBase64 && !storagePath)) {
+    res.status(400).json({ error: "fileName e fileBase64 obrigatorios" });
+    return;
+  }
   let wb: XLSX.WorkBook;
-  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try {
+    wb = await readWorkbook({ fileBase64, storagePath, storageBucket });
+  } catch {
+    res.status(400).json({ error: "Arquivo invalido" });
+    return;
+  }
   const rows = getRows(wb);
-  if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
-  const [snapshot] = await db.insert(base020502SnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
+  if (!rows.length) {
+    res.status(400).json({ error: "Planilha sem dados" });
+    return;
+  }
+  const [snapshot] = await db
+    .insert(base020502SnapshotsTable)
+    .values({ fileName, totalRows: rows.length })
+    .returning();
   const items = rows.map((r) => {
     const n = normalizeRow(r);
     return {
@@ -414,33 +625,63 @@ router.post("/bases/020502/upload", async (req, res): Promise<void> => {
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     await db.insert(base020502Table).values(items.slice(i, i + BATCH_SIZE));
   }
-  res.json({ success: true, message: `${items.length} itens importados`, rowsProcessed: items.length, fileName });
+  res.json({
+    success: true,
+    message: `${items.length} itens importados`,
+    rowsProcessed: items.length,
+    fileName,
+  });
 });
 
 router.get("/bases/020502/status", async (req, res): Promise<void> => {
-  
-  const db = getDb();
-  const [s] = await db.select().from(base020502SnapshotsTable).orderBy(desc(base020502SnapshotsTable.uploadedAt)).limit(1);
-  res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
+  try {
+    res.json(await getLatestStatus("base_020502_snapshots"));
+  } catch (error) {
+    req.log.error({ error }, "bases 020502 status failed");
+    res.status(500).json({ error: "Falha ao carregar status da base 020502" });
+  }
 });
 
 router.post("/bases/producao/upload", async (req, res): Promise<void> => {
-  
   const db = getDb();
-  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
-  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
+    fileName?: string;
+    fileBase64?: string;
+    storagePath?: string;
+    storageBucket?: string;
+  };
+  if (!fileName || (!fileBase64 && !storagePath)) {
+    res.status(400).json({ error: "fileName e fileBase64 obrigatorios" });
+    return;
+  }
   let wb: XLSX.WorkBook;
-  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
-  const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" }) as unknown[][];
-  if (rawRows.length < 2) { res.status(400).json({ error: "Planilha sem dados" }); return; }
+  try {
+    wb = await readWorkbook({ fileBase64, storagePath, storageBucket });
+  } catch {
+    res.status(400).json({ error: "Arquivo invalido" });
+    return;
+  }
+  const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], {
+    header: 1,
+    defval: "",
+  }) as unknown[][];
+  if (rawRows.length < 2) {
+    res.status(400).json({ error: "Planilha sem dados" });
+    return;
+  }
   const headers = (rawRows[0] as string[]).map(normalizeKey);
   const rows = rawRows.slice(1).map((r) => {
     const arr = r as unknown[];
     const obj: Record<string, unknown> = {};
-    headers.forEach((h, i) => { obj[h] = arr[i] ?? ""; });
+    headers.forEach((h, i) => {
+      obj[h] = arr[i] ?? "";
+    });
     return obj;
   });
-  const [snapshot] = await db.insert(baseProducaoSnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
+  const [snapshot] = await db
+    .insert(baseProducaoSnapshotsTable)
+    .values({ fileName, totalRows: rows.length })
+    .returning();
   const items = rows.map((n) => ({
     snapshotId: snapshot.id,
     date: str(n["date"] ?? n["data"]),
@@ -453,18 +694,24 @@ router.post("/bases/producao/upload", async (req, res): Promise<void> => {
   for (let i = 0; i < items.length; i += BATCH_SIZE) {
     await db.insert(baseProducaoTable).values(items.slice(i, i + BATCH_SIZE));
   }
-  res.json({ success: true, message: `${items.length} itens importados`, rowsProcessed: items.length, fileName });
+  res.json({
+    success: true,
+    message: `${items.length} itens importados`,
+    rowsProcessed: items.length,
+    fileName,
+  });
 });
 
 router.get("/bases/producao/status", async (req, res): Promise<void> => {
-  
-  const db = getDb();
-  const [s] = await db.select().from(baseProducaoSnapshotsTable).orderBy(desc(baseProducaoSnapshotsTable.uploadedAt)).limit(1);
-  res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
+  try {
+    res.json(await getLatestStatus("base_producao_snapshots"));
+  } catch (error) {
+    req.log.error({ error }, "bases producao status failed");
+    res.status(500).json({ error: "Falha ao carregar status da base producao" });
+  }
 });
 
 router.post("/bases/segmentos/upload", async (req, res): Promise<void> => {
-  
   const db = getDb();
 
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
@@ -537,13 +784,24 @@ router.post("/bases/segmentos/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/segmentos/status", async (req, res): Promise<void> => {
-  
-  const db = getDb();
-  const result = await db.execute(sql`SELECT COUNT(*)::int as total FROM produto_segmento`);
-  const row = result.rows[0];
-  const total = row ? Number((row as Record<string, unknown>).total ?? 0) : 0;
-  res.json({ totalRows: total, fileName: total > 0 ? "classificacao_segmentos" : null, uploadedAt: null });
+  try {
+    const { count: exactCount, error: countError } = await getSupabaseReadClient()
+      .from("produto_segmento")
+      .select("*", { count: "exact", head: true });
+
+    if (countError) {
+      throw countError;
+    }
+
+    res.json({
+      totalRows: exactCount ?? totalRows,
+      fileName: (exactCount ?? 0) > 0 ? "classificacao_segmentos" : null,
+      uploadedAt: null,
+    });
+  } catch (error) {
+    req.log.error({ error }, "bases segmentos status failed");
+    res.status(500).json({ error: "Falha ao carregar status da base segmentos" });
+  }
 });
 
 export default router;
-
