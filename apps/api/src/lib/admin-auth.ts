@@ -1,16 +1,19 @@
 import type { Request, Response } from "express";
-import { getDb, adminUsersTable, type AdminUser } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 
-type AuthenticatedAdmin = Pick<
-  AdminUser,
-  "id" | "email" | "name" | "authUserId"
->;
+type AuthenticatedAdmin = {
+  id: number;
+  email: string;
+  name: string;
+  authUserId: string | null;
+};
 
 type SupabaseUser = {
   id: string;
   email?: string | null;
 };
+
+let supabaseAdminClient: SupabaseClient | null = null;
 
 function getBearerToken(req: Request): string | null {
   const authHeader = req.headers.authorization;
@@ -22,53 +25,90 @@ function getBearerToken(req: Request): string | null {
   return token;
 }
 
-async function getAdminById(id: number): Promise<AuthenticatedAdmin | null> {
-  const db = getDb();
-  const [user] = await db
-    .select({
-      id: adminUsersTable.id,
-      email: adminUsersTable.email,
-      name: adminUsersTable.name,
-      authUserId: adminUsersTable.authUserId,
-    })
-    .from(adminUsersTable)
-    .where(eq(adminUsersTable.id, id));
+function getSupabaseAdminClient(): SupabaseClient {
+  if (supabaseAdminClient) {
+    return supabaseAdminClient;
+  }
 
-  return user ?? null;
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error(
+      "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY (ou SUPABASE_ANON_KEY) sao obrigatorios para autenticar administradores.",
+    );
+  }
+
+  supabaseAdminClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+
+  return supabaseAdminClient;
+}
+
+function mapAdminRow(row: Record<string, unknown> | null): AuthenticatedAdmin | null {
+  if (!row) {
+    return null;
+  }
+
+  return {
+    id: Number(row.id),
+    email: String(row.email ?? ""),
+    name: String(row.name ?? ""),
+    authUserId: row.auth_user_id == null ? null : String(row.auth_user_id),
+  };
+}
+
+async function getAdminById(id: number): Promise<AuthenticatedAdmin | null> {
+  const { data, error } = await getSupabaseAdminClient()
+    .from("admin_users")
+    .select("id, email, name, auth_user_id")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return mapAdminRow((data as Record<string, unknown> | null) ?? null);
 }
 
 async function getAdminByEmail(
   email: string,
 ): Promise<AuthenticatedAdmin | null> {
-  const db = getDb();
-  const [user] = await db
-    .select({
-      id: adminUsersTable.id,
-      email: adminUsersTable.email,
-      name: adminUsersTable.name,
-      authUserId: adminUsersTable.authUserId,
-    })
-    .from(adminUsersTable)
-    .where(eq(adminUsersTable.email, email.toLowerCase().trim()));
+  const normalizedEmail = email.toLowerCase().trim();
 
-  return user ?? null;
+  const { data, error } = await getSupabaseAdminClient()
+    .from("admin_users")
+    .select("id, email, name, auth_user_id")
+    .eq("email", normalizedEmail)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return mapAdminRow((data as Record<string, unknown> | null) ?? null);
 }
 
 async function getAdminByAuthUserId(
   authUserId: string,
 ): Promise<AuthenticatedAdmin | null> {
-  const db = getDb();
-  const [user] = await db
-    .select({
-      id: adminUsersTable.id,
-      email: adminUsersTable.email,
-      name: adminUsersTable.name,
-      authUserId: adminUsersTable.authUserId,
-    })
-    .from(adminUsersTable)
-    .where(eq(adminUsersTable.authUserId, authUserId));
+  const { data, error } = await getSupabaseAdminClient()
+    .from("admin_users")
+    .select("id, email, name, auth_user_id")
+    .eq("auth_user_id", authUserId)
+    .maybeSingle();
 
-  return user ?? null;
+  if (error) {
+    throw error;
+  }
+
+  return mapAdminRow((data as Record<string, unknown> | null) ?? null);
 }
 
 async function getSupabaseUser(token: string): Promise<SupabaseUser | null> {
@@ -126,12 +166,18 @@ export async function requireAdmin(
   req: Request,
   res: Response,
 ): Promise<AuthenticatedAdmin | null> {
-  const user = await getAuthenticatedAdmin(req);
+  try {
+    const user = await getAuthenticatedAdmin(req);
 
-  if (!user) {
-    res.status(401).json({ error: "Nao autenticado" });
+    if (!user) {
+      res.status(401).json({ error: "Nao autenticado" });
+      return null;
+    }
+
+    return user;
+  } catch (error) {
+    req.log.error({ error }, "admin auth failed");
+    res.status(500).json({ error: "Falha ao validar autenticacao administrativa" });
     return null;
   }
-
-  return user;
 }

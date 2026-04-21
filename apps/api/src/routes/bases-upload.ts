@@ -794,7 +794,7 @@ router.get("/bases/segmentos/status", async (req, res): Promise<void> => {
     }
 
     res.json({
-      totalRows: exactCount ?? totalRows,
+      totalRows: exactCount ?? 0,
       fileName: (exactCount ?? 0) > 0 ? "classificacao_segmentos" : null,
       uploadedAt: null,
     });
