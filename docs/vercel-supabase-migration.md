@@ -3,7 +3,7 @@
 Este projeto foi desacoplado do runtime do Replit para rodar com:
 
 - Frontend Vite em Vercel
-- API Express exposta por `api/index.ts` como function Node
+- API Express exposta por `api/index.js` e `api/[...path].js` como function Node
 - PostgreSQL no Supabase
 - Auth em transicao: Supabase Auth com fallback legado por email/senha
 
@@ -89,7 +89,8 @@ Observacoes:
 ## Configuracao Vercel aplicada
 
 - O frontend continua sendo publicado como app Vite estatico.
-- A API Express fica exposta por `api/index.ts` e `api/[...path].ts`.
+- O `buildCommand` gera primeiro o bundle do backend (`artifacts/api-server/dist/app.mjs`) e depois o build do frontend.
+- A API Express fica exposta por `api/index.js` e `api/[...path].js`, apontando para o bundle pronto do backend.
 - O `vercel.json` configura `maxDuration` de 300 segundos para as funcoes da pasta `api`.
 
 ## Validacoes locais
