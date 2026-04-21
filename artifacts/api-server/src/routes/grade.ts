@@ -14,10 +14,53 @@ async function getLatest0111SnapshotId(): Promise<number | null> {
   return snap?.id ?? null;
 }
 
+async function getLatestGradeSnapshotId(): Promise<{ id: number; uploadedAt: Date } | null> {
+  const [snap] = await db
+    .select()
+    .from(baseGradeSnapshotsTable)
+    .orderBy(desc(baseGradeSnapshotsTable.uploadedAt))
+    .limit(1);
+  return snap ?? null;
+}
+
+router.get("/grade/consulta/segmentos", async (_req, res): Promise<void> => {
+  const gradeSnapshot = await getLatestGradeSnapshotId();
+  const dim0111SnapshotId = await getLatest0111SnapshotId();
+
+  if (!gradeSnapshot || !dim0111SnapshotId) {
+    res.json({ segmentos: [] });
+    return;
+  }
+
+  const rows = await db
+    .selectDistinct({ tipoMarca: base0111Table.tipoMarca })
+    .from(baseGradeTable)
+    .innerJoin(
+      base0111Table,
+      and(
+        sql`${base0111Table.codigo}::bigint = ${baseGradeTable.codigoProduto}`,
+        eq(base0111Table.snapshotId, dim0111SnapshotId),
+      )!,
+    )
+    .where(eq(baseGradeTable.snapshotId, gradeSnapshot.id))
+    .orderBy(base0111Table.tipoMarca);
+
+  const segmentos = rows
+    .map((r) => r.tipoMarca)
+    .filter(Boolean)
+    .map((t) => ({
+      value: t,
+      label: t.replace(/^\d+\s*-\s*/, ""),
+    }));
+
+  res.json({ segmentos });
+});
+
 router.get("/grade/consulta", async (req, res): Promise<void> => {
   const {
     search,
     status,
+    segmento,
     page = "1",
     limit = "20",
   } = req.query as Record<string, string | undefined>;
@@ -26,26 +69,19 @@ router.get("/grade/consulta", async (req, res): Promise<void> => {
   const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? "20", 10)));
   const offset = (pageNum - 1) * limitNum;
 
-  const [latestGradeSnapshot] = await db
-    .select()
-    .from(baseGradeSnapshotsTable)
-    .orderBy(desc(baseGradeSnapshotsTable.uploadedAt))
-    .limit(1);
-
-  if (!latestGradeSnapshot) {
+  const gradeSnapshot = await getLatestGradeSnapshotId();
+  if (!gradeSnapshot) {
     res.json({ items: [], total: 0, page: pageNum, limit: limitNum, totalPages: 0, snapshotDate: null });
     return;
   }
 
-  const gradeSnapshotId = latestGradeSnapshot.id;
-  const snapshotDate = latestGradeSnapshot.uploadedAt.toISOString();
   const dim0111SnapshotId = await getLatest0111SnapshotId();
 
-  const conditions = [eq(baseGradeTable.snapshotId, gradeSnapshotId)];
+  const gradeConditions = [eq(baseGradeTable.snapshotId, gradeSnapshot.id)];
 
   if (search) {
     const searchTerm = `%${search}%`;
-    conditions.push(
+    gradeConditions.push(
       or(
         ilike(baseGradeTable.descricaoProduto, searchTerm),
         sql`${baseGradeTable.codigoProduto}::text ilike ${searchTerm}`,
@@ -54,17 +90,10 @@ router.get("/grade/consulta", async (req, res): Promise<void> => {
   }
 
   if (status === "disponivel") {
-    conditions.push(gt(baseGradeTable.saldoDisponivel, 0));
+    gradeConditions.push(gt(baseGradeTable.saldoDisponivel, 0));
   } else if (status === "ruptura") {
-    conditions.push(lte(baseGradeTable.saldoDisponivel, 0));
+    gradeConditions.push(lte(baseGradeTable.saldoDisponivel, 0));
   }
-
-  const whereClause = and(...conditions);
-
-  const [{ total }] = await db
-    .select({ total: sql<number>`count(*)::int` })
-    .from(baseGradeTable)
-    .where(whereClause);
 
   const joinCondition = dim0111SnapshotId
     ? and(
@@ -72,6 +101,17 @@ router.get("/grade/consulta", async (req, res): Promise<void> => {
         eq(base0111Table.snapshotId, dim0111SnapshotId),
       )
     : sql`${base0111Table.codigo}::bigint = ${baseGradeTable.codigoProduto}`;
+
+  const dimConditions = segmento ? [eq(base0111Table.tipoMarca, segmento)] : [];
+
+  const gradeWhereClause = and(...gradeConditions);
+  const dimWhereClause = dimConditions.length > 0 ? and(...dimConditions) : undefined;
+
+  const [{ total }] = await db
+    .select({ total: sql<number>`count(*)::int` })
+    .from(baseGradeTable)
+    .leftJoin(base0111Table, joinCondition!)
+    .where(dimWhereClause ? and(gradeWhereClause, dimWhereClause) : gradeWhereClause);
 
   const rows = await db
     .select({
@@ -85,11 +125,12 @@ router.get("/grade/consulta", async (req, res): Promise<void> => {
       saida: baseGradeTable.saida,
       saldoDisponivel: baseGradeTable.saldoDisponivel,
       embalagem: base0111Table.embalagem,
+      tipoMarca: base0111Table.tipoMarca,
       codigoProdutoSap: base0111Table.codigoProdutoSap,
     })
     .from(baseGradeTable)
     .leftJoin(base0111Table, joinCondition!)
-    .where(whereClause)
+    .where(dimWhereClause ? and(gradeWhereClause, dimWhereClause) : gradeWhereClause)
     .orderBy(baseGradeTable.descricaoProduto)
     .limit(limitNum)
     .offset(offset);
@@ -100,27 +141,25 @@ router.get("/grade/consulta", async (req, res): Promise<void> => {
     page: pageNum,
     limit: limitNum,
     totalPages: Math.ceil(total / limitNum),
-    snapshotDate,
+    snapshotDate: gradeSnapshot.uploadedAt.toISOString(),
   });
 });
 
 router.get("/grade/consulta/snapshot", async (_req, res): Promise<void> => {
-  const [snapshot] = await db
-    .select()
-    .from(baseGradeSnapshotsTable)
-    .orderBy(desc(baseGradeSnapshotsTable.uploadedAt))
-    .limit(1);
-
+  const snapshot = await getLatestGradeSnapshotId();
   if (!snapshot) {
     res.json({ fileName: null, uploadedAt: null, totalRows: null });
     return;
   }
-
-  res.json({
-    fileName: snapshot.fileName,
-    uploadedAt: snapshot.uploadedAt.toISOString(),
-    totalRows: snapshot.totalRows,
-  });
+  const [full] = await db
+    .select()
+    .from(baseGradeSnapshotsTable)
+    .where(eq(baseGradeSnapshotsTable.id, snapshot.id));
+  res.json(full ? {
+    fileName: full.fileName,
+    uploadedAt: full.uploadedAt.toISOString(),
+    totalRows: full.totalRows,
+  } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 export default router;

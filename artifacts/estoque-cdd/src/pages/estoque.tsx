@@ -24,6 +24,7 @@ interface GradeItem {
   saida: number;
   saldoDisponivel: number;
   embalagem: string | null;
+  tipoMarca: string | null;
   codigoProdutoSap: string | null;
 }
 
@@ -36,9 +37,31 @@ interface GradeResponse {
   snapshotDate: string | null;
 }
 
+interface Segmento {
+  value: string;
+  label: string;
+}
+
+function stripCode(value: string | null | undefined): string {
+  if (!value) return "—";
+  return value.replace(/^\d+\s*-\s*/, "").trim();
+}
+
+function useSegmentos() {
+  const [segmentos, setSegmentos] = useState<Segmento[]>([]);
+  useEffect(() => {
+    fetch(`${BASE_URL}/api/grade/consulta/segmentos`)
+      .then((r) => r.json())
+      .then((d) => setSegmentos(d.segmentos ?? []))
+      .catch(() => {});
+  }, []);
+  return segmentos;
+}
+
 function useGradeConsulta(params: {
   search?: string;
   status?: string;
+  segmento?: string;
   page: number;
   limit: number;
 }) {
@@ -47,7 +70,7 @@ function useGradeConsulta(params: {
   const [isFetching, setIsFetching] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  const fetch_ = useCallback(async () => {
+  const fetchData = useCallback(async () => {
     if (abortRef.current) abortRef.current.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -57,39 +80,41 @@ function useGradeConsulta(params: {
       const query = new URLSearchParams();
       if (params.search) query.set("search", params.search);
       if (params.status && params.status !== "all") query.set("status", params.status);
+      if (params.segmento && params.segmento !== "all") query.set("segmento", params.segmento);
       query.set("page", String(params.page));
       query.set("limit", String(params.limit));
 
       const res = await fetch(`${BASE_URL}/api/grade/consulta?${query.toString()}`, {
         signal: controller.signal,
       });
-      if (res.ok) {
-        const json: GradeResponse = await res.json();
-        setData(json);
-      }
+      if (res.ok) setData(await res.json());
     } catch (e: unknown) {
       if ((e as { name?: string }).name !== "AbortError") console.error(e);
     }
     setIsLoading(false);
     setIsFetching(false);
-  }, [params.search, params.status, params.page, params.limit]);
+  }, [params.search, params.status, params.segmento, params.page, params.limit]);
 
   useEffect(() => {
-    fetch_();
-  }, [fetch_]);
+    fetchData();
+  }, [fetchData]);
 
-  return { data, isLoading, isFetching, refetch: fetch_ };
+  return { data, isLoading, isFetching, refetch: fetchData };
 }
 
 export default function Estoque() {
   const [search, setSearch] = useState("");
   const debouncedSearch = useDebounce(search, 400);
   const [status, setStatus] = useState<string>("all");
+  const [segmento, setSegmento] = useState<string>("all");
   const [page, setPage] = useState(1);
+
+  const segmentos = useSegmentos();
 
   const { data, isLoading, isFetching, refetch } = useGradeConsulta({
     search: debouncedSearch || undefined,
     status,
+    segmento,
     page,
     limit: 20,
   });
@@ -97,6 +122,7 @@ export default function Estoque() {
   const clearFilters = () => {
     setSearch("");
     setStatus("all");
+    setSegmento("all");
     setPage(1);
   };
 
@@ -128,6 +154,8 @@ export default function Estoque() {
     );
   };
 
+  const hasActiveFilters = search !== "" || status !== "all" || segmento !== "all";
+
   return (
     <PublicLayout>
       <div className="max-w-[1400px] mx-auto w-full p-4 md:p-6 space-y-5">
@@ -154,20 +182,35 @@ export default function Estoque() {
 
         <Card className="p-4 shadow-sm">
           <div className="grid gap-3 md:grid-cols-12 items-end">
-            <div className="md:col-span-5 relative">
+            <div className="md:col-span-4 relative">
               <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Produto ou Código</label>
               <Search className="absolute left-3 top-[30px] h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Buscar por descrição ou código..."
                 className="pl-9"
                 value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
+                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
               />
             </div>
+
             <div className="md:col-span-3">
+              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Segmento</label>
+              <Select value={segmento} onValueChange={(val) => { setSegmento(val); setPage(1); }}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Todos os segmentos" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todos os segmentos</SelectItem>
+                  {segmentos.map((s) => (
+                    <SelectItem key={s.value} value={s.value}>
+                      {s.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="md:col-span-2">
               <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Situação</label>
               <Select value={status} onValueChange={(val) => { setStatus(val); setPage(1); }}>
                 <SelectTrigger>
@@ -175,24 +218,30 @@ export default function Estoque() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos</SelectItem>
-                  <SelectItem value="disponivel">Disponível (saldo &gt; 0)</SelectItem>
-                  <SelectItem value="ruptura">Ruptura (saldo = 0)</SelectItem>
+                  <SelectItem value="disponivel">Disponível</SelectItem>
+                  <SelectItem value="ruptura">Ruptura</SelectItem>
                 </SelectContent>
               </Select>
             </div>
+
             <div className="md:col-span-2 flex items-end">
-              <Button variant="ghost" className="w-full text-muted-foreground" onClick={clearFilters}>
+              <Button
+                variant="ghost"
+                className={`w-full ${hasActiveFilters ? "text-primary" : "text-muted-foreground"}`}
+                onClick={clearFilters}
+              >
                 <FilterX className="h-4 w-4 mr-2" />
                 Limpar
               </Button>
             </div>
-            {data && (
-              <div className="md:col-span-2 flex items-end justify-end">
-                <span className="text-xs text-muted-foreground">
+
+            <div className="md:col-span-1 flex items-end justify-end">
+              {data && (
+                <span className="text-xs text-muted-foreground whitespace-nowrap">
                   <span className="font-semibold text-foreground">{data.total.toLocaleString("pt-BR")}</span> SKUs
                 </span>
-              </div>
-            )}
+              )}
+            </div>
           </div>
         </Card>
 
@@ -208,9 +257,10 @@ export default function Estoque() {
                 <TableRow>
                   <TableHead className="w-[90px]">Situação</TableHead>
                   <TableHead className="w-[80px]">Cód.</TableHead>
-                  <TableHead className="min-w-[260px]">Produto</TableHead>
+                  <TableHead className="min-w-[240px]">Produto</TableHead>
                   <TableHead className="w-[60px]">Un.</TableHead>
-                  <TableHead className="w-[130px]">Embalagem</TableHead>
+                  <TableHead className="w-[140px]">Embalagem</TableHead>
+                  <TableHead className="w-[140px]">Segmento</TableHead>
                   <TableHead className="text-right w-[100px]">Grade Cad.</TableHead>
                   <TableHead className="text-right w-[80px]">Reserva</TableHead>
                   <TableHead className="text-right w-[80px]">Saída</TableHead>
@@ -220,13 +270,13 @@ export default function Estoque() {
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="h-40 text-center">
+                    <TableCell colSpan={10} className="h-40 text-center">
                       <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
                     </TableCell>
                   </TableRow>
                 ) : !data || data.items.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} className="h-40 text-center text-muted-foreground">
+                    <TableCell colSpan={10} className="h-40 text-center text-muted-foreground">
                       {data === null
                         ? "Nenhum dado de grade carregado. Faça o upload da base_grade no painel administrativo."
                         : "Nenhum produto encontrado com os filtros aplicados."}
@@ -239,9 +289,8 @@ export default function Estoque() {
                       <TableCell className="font-mono text-xs text-muted-foreground">{item.codigoProduto}</TableCell>
                       <TableCell className="font-medium text-xs leading-tight">{item.descricaoProduto}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{item.unidadeMedida}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground truncate max-w-[130px]">
-                        {item.embalagem ?? "—"}
-                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{stripCode(item.embalagem)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{stripCode(item.tipoMarca)}</TableCell>
                       <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
                         {item.gradeCadastrada.toLocaleString("pt-BR")}
                       </TableCell>
@@ -272,20 +321,10 @@ export default function Estoque() {
                 {data.total.toLocaleString("pt-BR")} SKUs
               </div>
               <div className="flex items-center gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  disabled={page === 1}
-                >
+                <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
                   Anterior
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setPage((p) => Math.min(data.totalPages, p + 1))}
-                  disabled={page === data.totalPages}
-                >
+                <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.min(data.totalPages, p + 1))} disabled={page === data.totalPages}>
                   Próxima
                 </Button>
               </div>
