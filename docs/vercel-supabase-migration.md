@@ -12,7 +12,7 @@ Este projeto foi desacoplado do runtime do Replit para rodar com:
 Defina estas variaveis na Vercel:
 
 ```env
-DATABASE_URL=postgresql://...
+DATABASE_URL=postgresql://...:6543/postgres
 VITE_API_BASE_URL=
 VITE_SUPABASE_URL=https://<project-ref>.supabase.co
 VITE_SUPABASE_ANON_KEY=<anon-key>
@@ -60,6 +60,7 @@ pnpm --filter @workspace/db run seed:admin
 
 Observacoes:
 
+- Na Vercel, prefira a connection string do pooler do Supabase em modo transaction (`:6543`) para o runtime serverless.
 - Se `ADMIN_AUTH_USER_ID` for informado, o backend vai preferir o vinculo pelo `uuid` do Supabase Auth.
 - Se `ADMIN_AUTH_USER_ID` estiver vazio, o backend aceita o email do usuario autenticado no Supabase como fallback de transicao.
 - O login legado continua disponivel enquanto `SESSION_SECRET` existir e houver um `password_hash` em `admin_users`.
@@ -84,6 +85,12 @@ Observacoes:
 - Em producao, `SUPABASE_SERVICE_ROLE_KEY` e obrigatoria para assinar uploads e baixar o arquivo do bucket privado.
 - O bucket usado por padrao e `app-uploads`, mas pode ser alterado por `SUPABASE_UPLOAD_BUCKET`.
 - Em desenvolvimento local, se a `SUPABASE_SERVICE_ROLE_KEY` nao existir, a tela faz fallback para o fluxo legado em base64 apenas para nao bloquear testes locais.
+
+## Configuracao Vercel aplicada
+
+- O frontend continua sendo publicado como app Vite estatico.
+- A API Express fica exposta por `api/index.ts` e `api/[...path].ts`.
+- O `vercel.json` configura `maxDuration` de 300 segundos para as funcoes da pasta `api`.
 
 ## Validacoes locais
 
