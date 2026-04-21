@@ -13,6 +13,20 @@ import { ptBR } from "date-fns/locale";
 
 const BASE_URL = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
 
+const SEGMENTOS = [
+  "MKTPLACE",
+  "MONDELEZ-MINALBA",
+  "NAB",
+  "SKU LIMIT",
+  "Alto Giro",
+  "Match",
+  "Megabrands",
+  "Resort",
+  "FOCO_SEAL",
+  "Litrinho",
+  "Chopp",
+];
+
 interface GradeItem {
   id: number;
   codigoProduto: number;
@@ -23,9 +37,11 @@ interface GradeItem {
   reserva: number;
   saida: number;
   saldoDisponivel: number;
+  curva: "A" | "B" | "C";
   embalagem: string | null;
   tipoMarca: string | null;
   codigoProdutoSap: string | null;
+  segmento: string | null;
 }
 
 interface GradeResponse {
@@ -37,31 +53,16 @@ interface GradeResponse {
   snapshotDate: string | null;
 }
 
-interface Segmento {
-  value: string;
-  label: string;
-}
-
 function stripCode(value: string | null | undefined): string {
   if (!value) return "—";
   return value.replace(/^\d+\s*-\s*/, "").trim();
-}
-
-function useSegmentos() {
-  const [segmentos, setSegmentos] = useState<Segmento[]>([]);
-  useEffect(() => {
-    fetch(`${BASE_URL}/api/grade/consulta/segmentos`)
-      .then((r) => r.json())
-      .then((d) => setSegmentos(d.segmentos ?? []))
-      .catch(() => {});
-  }, []);
-  return segmentos;
 }
 
 function useGradeConsulta(params: {
   search?: string;
   status?: string;
   segmento?: string;
+  curva?: string;
   page: number;
   limit: number;
 }) {
@@ -81,6 +82,7 @@ function useGradeConsulta(params: {
       if (params.search) query.set("search", params.search);
       if (params.status && params.status !== "all") query.set("status", params.status);
       if (params.segmento && params.segmento !== "all") query.set("segmento", params.segmento);
+      if (params.curva && params.curva !== "all") query.set("curva", params.curva);
       query.set("page", String(params.page));
       query.set("limit", String(params.limit));
 
@@ -93,7 +95,7 @@ function useGradeConsulta(params: {
     }
     setIsLoading(false);
     setIsFetching(false);
-  }, [params.search, params.status, params.segmento, params.page, params.limit]);
+  }, [params.search, params.status, params.segmento, params.curva, params.page, params.limit]);
 
   useEffect(() => {
     fetchData();
@@ -107,14 +109,14 @@ export default function Estoque() {
   const debouncedSearch = useDebounce(search, 400);
   const [status, setStatus] = useState<string>("all");
   const [segmento, setSegmento] = useState<string>("all");
+  const [curva, setCurva] = useState<string>("all");
   const [page, setPage] = useState(1);
-
-  const segmentos = useSegmentos();
 
   const { data, isLoading, isFetching, refetch } = useGradeConsulta({
     search: debouncedSearch || undefined,
     status,
     segmento,
+    curva,
     page,
     limit: 20,
   });
@@ -123,8 +125,11 @@ export default function Estoque() {
     setSearch("");
     setStatus("all");
     setSegmento("all");
+    setCurva("all");
     setPage(1);
   };
+
+  const hasActiveFilters = search !== "" || status !== "all" || segmento !== "all" || curva !== "all";
 
   const getSaldoBadge = (saldo: number) => {
     if (saldo > 0)
@@ -134,7 +139,7 @@ export default function Estoque() {
         </Badge>
       );
     return (
-      <Badge variant="destructive" className="bg-red-50 text-red-700 border-red-200 font-mono font-semibold tabular-nums">
+      <Badge className="bg-red-100 text-red-700 border-red-200 font-mono font-semibold tabular-nums" variant="outline">
         {saldo.toLocaleString("pt-BR")}
       </Badge>
     );
@@ -142,23 +147,19 @@ export default function Estoque() {
 
   const getStatusBadge = (saldo: number) => {
     if (saldo > 0)
-      return (
-        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">
-          Disponível
-        </Badge>
-      );
-    return (
-      <Badge variant="destructive" className="bg-red-50 text-red-700 border-red-200 text-[10px]">
-        Ruptura
-      </Badge>
-    );
+      return <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">Disponível</Badge>;
+    return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 text-[10px]">Ruptura</Badge>;
   };
 
-  const hasActiveFilters = search !== "" || status !== "all" || segmento !== "all";
+  const getCurvaBadge = (c: string) => {
+    if (c === "A") return <Badge className="bg-blue-600 text-white text-[10px] font-bold w-6 justify-center">A</Badge>;
+    if (c === "B") return <Badge className="bg-amber-500 text-white text-[10px] font-bold w-6 justify-center">B</Badge>;
+    return <Badge variant="outline" className="text-muted-foreground text-[10px] font-bold w-6 justify-center">C</Badge>;
+  };
 
   return (
     <PublicLayout>
-      <div className="max-w-[1400px] mx-auto w-full p-4 md:p-6 space-y-5">
+      <div className="max-w-[1500px] mx-auto w-full p-4 md:p-6 space-y-5">
         <div className="flex items-start justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold tracking-tight text-foreground">Consulta de Estoque</h1>
@@ -201,16 +202,29 @@ export default function Estoque() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos os segmentos</SelectItem>
-                  {segmentos.map((s) => (
-                    <SelectItem key={s.value} value={s.value}>
-                      {s.label}
-                    </SelectItem>
+                  {SEGMENTOS.map((s) => (
+                    <SelectItem key={s} value={s}>{s}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
 
             <div className="md:col-span-2">
+              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Curva ABC</label>
+              <Select value={curva} onValueChange={(val) => { setCurva(val); setPage(1); }}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Todas" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Todas</SelectItem>
+                  <SelectItem value="A">Curva A</SelectItem>
+                  <SelectItem value="B">Curva B</SelectItem>
+                  <SelectItem value="C">Curva C</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="md:col-span-1">
               <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Situação</label>
               <Select value={status} onValueChange={(val) => { setStatus(val); setPage(1); }}>
                 <SelectTrigger>
@@ -224,20 +238,21 @@ export default function Estoque() {
               </Select>
             </div>
 
-            <div className="md:col-span-2 flex items-end">
+            <div className="md:col-span-1 flex items-end">
               <Button
                 variant="ghost"
+                size="sm"
                 className={`w-full ${hasActiveFilters ? "text-primary" : "text-muted-foreground"}`}
                 onClick={clearFilters}
               >
-                <FilterX className="h-4 w-4 mr-2" />
+                <FilterX className="h-4 w-4 mr-1" />
                 Limpar
               </Button>
             </div>
 
             <div className="md:col-span-1 flex items-end justify-end">
               {data && (
-                <span className="text-xs text-muted-foreground whitespace-nowrap">
+                <span className="text-xs text-muted-foreground whitespace-nowrap text-right">
                   <span className="font-semibold text-foreground">{data.total.toLocaleString("pt-BR")}</span> SKUs
                 </span>
               )}
@@ -255,28 +270,29 @@ export default function Estoque() {
             <Table>
               <TableHeader className="bg-muted/50">
                 <TableRow>
-                  <TableHead className="w-[90px]">Situação</TableHead>
-                  <TableHead className="w-[80px]">Cód.</TableHead>
-                  <TableHead className="min-w-[240px]">Produto</TableHead>
-                  <TableHead className="w-[60px]">Un.</TableHead>
-                  <TableHead className="w-[140px]">Embalagem</TableHead>
-                  <TableHead className="w-[140px]">Segmento</TableHead>
-                  <TableHead className="text-right w-[100px]">Grade Cad.</TableHead>
-                  <TableHead className="text-right w-[80px]">Reserva</TableHead>
-                  <TableHead className="text-right w-[80px]">Saída</TableHead>
-                  <TableHead className="text-right w-[110px]">Saldo Disp.</TableHead>
+                  <TableHead className="w-[80px]">Situação</TableHead>
+                  <TableHead className="w-[55px] text-center">Curva</TableHead>
+                  <TableHead className="w-[70px]">Cód.</TableHead>
+                  <TableHead className="min-w-[220px]">Produto</TableHead>
+                  <TableHead className="w-[55px]">Un.</TableHead>
+                  <TableHead className="w-[130px]">Embalagem</TableHead>
+                  <TableHead className="w-[120px]">Segmento</TableHead>
+                  <TableHead className="text-right w-[95px]">Grade Cad.</TableHead>
+                  <TableHead className="text-right w-[70px]">Reserva</TableHead>
+                  <TableHead className="text-right w-[70px]">Saída</TableHead>
+                  <TableHead className="text-right w-[100px]">Saldo Disp.</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {isLoading ? (
                   <TableRow>
-                    <TableCell colSpan={10} className="h-40 text-center">
+                    <TableCell colSpan={11} className="h-40 text-center">
                       <Loader2 className="h-6 w-6 animate-spin mx-auto text-muted-foreground" />
                     </TableCell>
                   </TableRow>
                 ) : !data || data.items.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={10} className="h-40 text-center text-muted-foreground">
+                    <TableCell colSpan={11} className="h-40 text-center text-muted-foreground">
                       {data === null
                         ? "Nenhum dado de grade carregado. Faça o upload da base_grade no painel administrativo."
                         : "Nenhum produto encontrado com os filtros aplicados."}
@@ -284,25 +300,32 @@ export default function Estoque() {
                   </TableRow>
                 ) : (
                   data.items.map((item) => (
-                    <TableRow key={item.id} className="hover:bg-muted/30 transition-colors">
+                    <TableRow key={item.id as number} className="hover:bg-muted/30 transition-colors">
                       <TableCell>{getStatusBadge(item.saldoDisponivel)}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{item.codigoProduto}</TableCell>
-                      <TableCell className="font-medium text-xs leading-tight">{item.descricaoProduto}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{item.unidadeMedida}</TableCell>
+                      <TableCell className="text-center">{getCurvaBadge(item.curva)}</TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">{item.codigoProduto as number}</TableCell>
+                      <TableCell className="font-medium text-xs leading-tight">{item.descricaoProduto as string}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">{item.unidadeMedida as string}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{stripCode(item.embalagem)}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{stripCode(item.tipoMarca)}</TableCell>
+                      <TableCell className="text-xs">
+                        {item.segmento ? (
+                          <Badge variant="outline" className="text-[10px] font-medium">{item.segmento as string}</Badge>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                        {item.gradeCadastrada.toLocaleString("pt-BR")}
+                        {(item.gradeCadastrada as number).toLocaleString("pt-BR")}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs tabular-nums">
-                        {item.reserva > 0 ? (
-                          <span className="text-amber-600 font-semibold">{item.reserva.toLocaleString("pt-BR")}</span>
+                        {(item.reserva as number) > 0 ? (
+                          <span className="text-amber-600 font-semibold">{(item.reserva as number).toLocaleString("pt-BR")}</span>
                         ) : (
                           <span className="text-muted-foreground">0</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                        {item.saida.toLocaleString("pt-BR")}
+                        {(item.saida as number).toLocaleString("pt-BR")}
                       </TableCell>
                       <TableCell className="text-right">{getSaldoBadge(item.saldoDisponivel)}</TableCell>
                     </TableRow>

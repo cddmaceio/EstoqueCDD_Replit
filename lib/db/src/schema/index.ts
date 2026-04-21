@@ -6,3 +6,4 @@ export * from "./base_exemplo";
 export * from "./base_020501";
 export * from "./base_020502";
 export * from "./base_producao";
+export * from "./produto_segmento";

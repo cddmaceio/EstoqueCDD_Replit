@@ -115,6 +115,22 @@ export default function Upload() {
 
         <div>
           <div className="flex items-center gap-3 mb-4">
+            <div className="h-2 w-2 rounded-full bg-purple-500" />
+            <h2 className="text-base font-semibold">Classificação de Produtos</h2>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            <BaseSection
+              endpoint="segmentos"
+              title="classificacao_segmentos"
+              description="Mapeamento de código Promax → Segmento. Colunas obrigatórias: codigo_produto (Promax), segmento (ex: NAB, Chopp, Alto Giro, Match…). Substitui toda a classificação anterior."
+            />
+          </div>
+        </div>
+
+        <Separator />
+
+        <div>
+          <div className="flex items-center gap-3 mb-4">
             <div className="h-2 w-2 rounded-full bg-blue-500" />
             <h2 className="text-base font-semibold">Bases do Sistema Logístico</h2>
           </div>

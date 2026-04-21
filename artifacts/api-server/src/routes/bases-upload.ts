@@ -15,8 +15,9 @@ import {
   base020502Table,
   baseProducaoSnapshotsTable,
   baseProducaoTable,
+  produtoSegmentoTable,
 } from "@workspace/db";
-import { desc } from "drizzle-orm";
+import { desc, sql } from "drizzle-orm";
 import * as XLSX from "xlsx";
 
 const router: IRouter = Router();
@@ -449,6 +450,41 @@ router.get("/bases/producao/status", async (req, res): Promise<void> => {
   if (!requireAdmin(req, res)) return;
   const [s] = await db.select().from(baseProducaoSnapshotsTable).orderBy(desc(baseProducaoSnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
+});
+
+router.post("/bases/segmentos/upload", async (req, res): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
+  const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
+  if (!fileName || !fileBase64) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  let wb: XLSX.WorkBook;
+  try { wb = readWorkbook(fileBase64); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  const rows = getRows(wb);
+  if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
+
+  const items: { codigoProduto: number; segmento: string }[] = [];
+  for (const r of rows) {
+    const n = normalizeRow(r);
+    const codigo = parseInt0(n["codigoproduto"] ?? n["codigo"] ?? n["promax"] ?? n["cod"]);
+    const seg = str(n["segmento"] ?? n["segment"] ?? n["segmento_produto"]);
+    if (codigo > 0 && seg) items.push({ codigoProduto: codigo, segmento: seg });
+  }
+
+  if (!items.length) { res.status(400).json({ error: "Nenhum registro válido encontrado. Colunas esperadas: codigo_produto, segmento" }); return; }
+
+  await db.execute(sql`TRUNCATE produto_segmento RESTART IDENTITY`);
+
+  for (let i = 0; i < items.length; i += BATCH_SIZE) {
+    await db.insert(produtoSegmentoTable).values(items.slice(i, i + BATCH_SIZE));
+  }
+
+  res.json({ success: true, message: `${items.length} classificações importadas`, rowsProcessed: items.length, fileName });
+});
+
+router.get("/bases/segmentos/status", async (req, res): Promise<void> => {
+  if (!requireAdmin(req, res)) return;
+  const [row] = await db.execute(sql`SELECT COUNT(*)::int as total FROM produto_segmento`);
+  const total = row ? Number((row as Record<string, unknown>).total ?? 0) : 0;
+  res.json({ totalRows: total, fileName: total > 0 ? "classificacao_segmentos" : null, uploadedAt: null });
 });
 
 export default router;
