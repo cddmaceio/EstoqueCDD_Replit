@@ -1,11 +1,83 @@
 import { Router, type IRouter } from "express";
-import { getDb, estoqueItemsTable, uploadSnapshotsTable } from "@workspace/db";
-import { desc } from "drizzle-orm";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import * as XLSX from "xlsx";
 import { requireAdmin } from "../lib/admin-auth";
 import { readUploadedFileBuffer } from "../lib/upload-storage";
 
 const router: IRouter = Router();
+let supabaseClient: SupabaseClient | null = null;
+
+function getSupabaseWriteClient(): SupabaseClient {
+  if (supabaseClient) {
+    return supabaseClient;
+  }
+
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error(
+      "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY (ou SUPABASE_ANON_KEY) sao obrigatorios para upload de estoque.",
+    );
+  }
+
+  supabaseClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+
+  return supabaseClient;
+}
+
+async function insertSnapshot(
+  fileName: string,
+  totalRows: number,
+): Promise<{ id: number }> {
+  const { data, error } = await getSupabaseWriteClient()
+    .from("upload_snapshots")
+    .insert({
+      file_name: fileName,
+      total_rows: totalRows,
+    })
+    .select("id")
+    .single();
+
+  if (error) {
+    throw error;
+  }
+
+  return { id: Number(data.id) };
+}
+
+async function insertEstoqueRows(
+  rows: Array<{
+    snapshot_id: number;
+    produto: string;
+    marca: string;
+    embalagem: string;
+    doi: number;
+    status: string;
+    demanda: number;
+    min: number;
+    max: number;
+    curva: string;
+  }>,
+): Promise<void> {
+  if (!rows.length) {
+    return;
+  }
+
+  const { error } = await getSupabaseWriteClient()
+    .from("estoque_items")
+    .insert(rows);
+
+  if (error) {
+    throw error;
+  }
+}
 
 function normalizeHeader(header: string): string {
   return header
@@ -90,91 +162,83 @@ router.post("/estoque/upload", async (req, res): Promise<void> => {
   if (!(await requireAdmin(req, res))) {
     return;
   }
-
-  const db = getDb();
-
-  const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
-    fileName?: string;
-    fileBase64?: string;
-    storagePath?: string;
-    storageBucket?: string;
-  };
-
-  if (!fileName || (!fileBase64 && !storagePath)) {
-    res
-      .status(400)
-      .json({ error: "fileName e (fileBase64 ou storagePath) sao obrigatorios" });
-    return;
-  }
-
-  let workbook: XLSX.WorkBook;
-
   try {
+    const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
+      fileName?: string;
+      fileBase64?: string;
+      storagePath?: string;
+      storageBucket?: string;
+    };
+
+    if (!fileName || (!fileBase64 && !storagePath)) {
+      res.status(400).json({
+        error: "fileName e (fileBase64 ou storagePath) sao obrigatorios",
+      });
+      return;
+    }
+
     const buffer = await readUploadedFileBuffer({
       fileBase64,
       storagePath,
       storageBucket,
     });
-    workbook = XLSX.read(buffer, { type: "buffer" });
-  } catch {
-    res.status(400).json({ error: "Arquivo invalido. Use .xlsx ou .csv" });
-    return;
+    const workbook = XLSX.read(buffer, { type: "buffer" });
+    const sheetName = workbook.SheetNames[0];
+
+    if (!sheetName) {
+      res.status(400).json({ error: "Planilha vazia" });
+      return;
+    }
+
+    const sheet = workbook.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
+
+    if (rows.length === 0) {
+      res.status(400).json({ error: "Planilha sem dados" });
+      return;
+    }
+
+    const items = rows
+      .map(mapRowToItem)
+      .filter((item): item is NonNullable<typeof item> => item !== null);
+
+    if (items.length === 0) {
+      res
+        .status(400)
+        .json({ error: "Nenhum item valido encontrado na planilha" });
+      return;
+    }
+
+    const snapshot = await insertSnapshot(fileName, items.length);
+
+    const batchSize = 500;
+    for (let index = 0; index < items.length; index += batchSize) {
+      const batch = items.slice(index, index + batchSize).map((item) => ({
+        snapshot_id: snapshot.id,
+        produto: item.produto,
+        marca: item.marca,
+        embalagem: item.embalagem,
+        doi: item.doi,
+        status: item.status,
+        demanda: item.demanda,
+        min: item.min,
+        max: item.max,
+        curva: item.curva,
+      }));
+
+      await insertEstoqueRows(batch);
+    }
+
+    res.json({
+      success: true,
+      message: `Upload processado com sucesso: ${items.length} itens importados`,
+      rowsProcessed: items.length,
+      fileName,
+    });
+  } catch (error) {
+    req.log.error({ error }, "estoque upload failed");
+    res.status(500).json({ error: "Falha ao processar upload de estoque" });
   }
-
-  const sheetName = workbook.SheetNames[0];
-  if (!sheetName) {
-    res.status(400).json({ error: "Planilha vazia" });
-    return;
-  }
-
-  const sheet = workbook.Sheets[sheetName];
-  const rows = XLSX.utils.sheet_to_json(sheet) as Record<string, unknown>[];
-
-  if (rows.length === 0) {
-    res.status(400).json({ error: "Planilha sem dados" });
-    return;
-  }
-
-  const items = rows
-    .map(mapRowToItem)
-    .filter((item): item is NonNullable<typeof item> => item !== null);
-
-  if (items.length === 0) {
-    res
-      .status(400)
-      .json({ error: "Nenhum item valido encontrado na planilha" });
-    return;
-  }
-
-  const [snapshot] = await db
-    .insert(uploadSnapshotsTable)
-    .values({ fileName, totalRows: items.length })
-    .returning();
-
-  const batchSize = 500;
-  for (let index = 0; index < items.length; index += batchSize) {
-    const batch = items.slice(index, index + batchSize).map((item) => ({
-      ...item,
-      snapshotId: snapshot.id,
-    }));
-    await db.insert(estoqueItemsTable).values(batch);
-  }
-
-  const previousSnapshots = await db
-    .select()
-    .from(uploadSnapshotsTable)
-    .orderBy(desc(uploadSnapshotsTable.uploadedAt));
-
-  if (previousSnapshots.length > 5) {
-    req.log.info("Keeping only latest 5 snapshots");
-  }
-
-  res.json({
-    success: true,
-    message: `Upload processado com sucesso: ${items.length} itens importados`,
-    rowsProcessed: items.length,
-    fileName,
-  });
 });
 
 export default router;
