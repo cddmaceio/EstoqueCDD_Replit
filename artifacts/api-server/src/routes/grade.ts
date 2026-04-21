@@ -1,6 +1,10 @@
 import { Router, type IRouter } from "express";
 import { db } from "@workspace/db";
-import { baseGradeSnapshotsTable, base0111SnapshotsTable } from "@workspace/db";
+import {
+  baseGradeSnapshotsTable,
+  base0111SnapshotsTable,
+  produtoSegmentoTable,
+} from "@workspace/db";
 import { sql, desc } from "drizzle-orm";
 
 const router: IRouter = Router();
@@ -15,23 +19,19 @@ async function getLatest0111Id(): Promise<number | null> {
   return snap?.id ?? null;
 }
 
-const STATIC_SEGMENTOS = [
-  "MKTPLACE",
-  "MONDELEZ-MINALBA",
-  "NAB",
-  "SKU LIMIT",
-  "Alto Giro",
-  "Match",
-  "Megabrands",
-  "Resort",
-  "FOCO_SEAL",
-  "Litrinho",
-  "Chopp",
-  "Multpack",
-];
-
 router.get("/grade/consulta/segmentos", async (_req, res): Promise<void> => {
-  res.json({ segmentos: STATIC_SEGMENTOS.map((s) => ({ value: s, label: s })) });
+  const segmentos = await db
+    .selectDistinct({ value: produtoSegmentoTable.segmento })
+    .from(produtoSegmentoTable)
+    .where(sql`${produtoSegmentoTable.segmento} <> ''`)
+    .orderBy(produtoSegmentoTable.segmento);
+
+  res.json({
+    segmentos: segmentos.map(({ value }) => ({
+      value,
+      label: value,
+    })),
+  });
 });
 
 router.get("/grade/consulta", async (req, res): Promise<void> => {

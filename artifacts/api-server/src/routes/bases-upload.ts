@@ -19,21 +19,11 @@ import {
 } from "@workspace/db";
 import { desc, sql } from "drizzle-orm";
 import * as XLSX from "xlsx";
+import { requireAdmin } from "../lib/admin-auth";
+import { readUploadedFileBuffer } from "../lib/upload-storage";
 
 const router: IRouter = Router();
 const BATCH_SIZE = 500;
-
-function requireAdmin(
-  req: Parameters<Parameters<IRouter["post"]>[1]>[0],
-  res: Parameters<Parameters<IRouter["post"]>[1]>[1],
-): boolean {
-  const userId = (req.session as Record<string, unknown>).userId;
-  if (!userId) {
-    res.status(401).json({ error: "Não autenticado" });
-    return false;
-  }
-  return true;
-}
 
 function parseFloat0(v: unknown): number {
   if (v == null) return 0;
@@ -54,8 +44,12 @@ function str(v: unknown): string {
   return String(v).trim();
 }
 
-function readWorkbook(fileBase64: string): XLSX.WorkBook {
-  const buffer = Buffer.from(fileBase64, "base64");
+async function readWorkbook(input: {
+  fileBase64?: string;
+  storagePath?: string;
+  storageBucket?: string;
+}): Promise<XLSX.WorkBook> {
+  const buffer = await readUploadedFileBuffer(input);
   return XLSX.read(buffer, { type: "buffer", codepage: 28591 });
 }
 
@@ -63,6 +57,19 @@ function getRows(wb: XLSX.WorkBook): Record<string, unknown>[] {
   const sheetName = wb.SheetNames[0];
   if (!sheetName) return [];
   return XLSX.utils.sheet_to_json(wb.Sheets[sheetName], { defval: "" }) as Record<string, unknown>[];
+}
+
+function getRowsFromAllSheets(
+  wb: XLSX.WorkBook,
+): Array<{ sheetName: string; row: Record<string, unknown> }> {
+  return wb.SheetNames.flatMap((sheetName) => {
+    const sheet = wb.Sheets[sheetName];
+    if (!sheet) return [];
+
+    const rows = XLSX.utils.sheet_to_json(sheet, { defval: "" }) as Record<string, unknown>[];
+
+    return rows.map((row) => ({ sheetName, row }));
+  });
 }
 
 function normalizeKey(k: string): string {
@@ -81,22 +88,12 @@ function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
   return out;
 }
 
-async function insertBatched<T extends object>(
-  table: { $inferInsert: T },
-  db_: typeof db,
-  items: T[],
-): Promise<void> {
-  for (let i = 0; i < items.length; i += BATCH_SIZE) {
-    await db_.insert(table as Parameters<typeof db_.insert>[0]).values(items.slice(i, i + BATCH_SIZE) as Parameters<ReturnType<typeof db_.insert>["values"]>[0]);
-  }
-}
-
 router.post("/bases/grade/upload", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
-  const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
-  if (!fileName || !fileBase64) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  if (!(await requireAdmin(req, res))) return;
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
+  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
-  try { wb = readWorkbook(fileBase64); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
   const rows = getRows(wb);
   if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
   const [snapshot] = await db.insert(baseGradeSnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
@@ -121,17 +118,17 @@ router.post("/bases/grade/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/grade/status", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
+  if (!(await requireAdmin(req, res))) return;
   const [s] = await db.select().from(baseGradeSnapshotsTable).orderBy(desc(baseGradeSnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/0111/upload", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
-  const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
-  if (!fileName || !fileBase64) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  if (!(await requireAdmin(req, res))) return;
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
+  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
-  try { wb = readWorkbook(fileBase64); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
   const rows = getRows(wb);
   if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
   const [snapshot] = await db.insert(base0111SnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
@@ -182,17 +179,17 @@ router.post("/bases/0111/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/0111/status", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
+  if (!(await requireAdmin(req, res))) return;
   const [s] = await db.select().from(base0111SnapshotsTable).orderBy(desc(base0111SnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/agendados/upload", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
-  const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
-  if (!fileName || !fileBase64) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  if (!(await requireAdmin(req, res))) return;
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
+  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
-  try { wb = readWorkbook(fileBase64); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
   const rows = getRows(wb);
   if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
   const [snapshot] = await db.insert(baseAgendadosSnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
@@ -256,17 +253,17 @@ router.post("/bases/agendados/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/agendados/status", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
+  if (!(await requireAdmin(req, res))) return;
   const [s] = await db.select().from(baseAgendadosSnapshotsTable).orderBy(desc(baseAgendadosSnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/exemplo/upload", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
-  const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
-  if (!fileName || !fileBase64) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  if (!(await requireAdmin(req, res))) return;
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
+  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
-  try { wb = readWorkbook(fileBase64); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
   const rows = getRows(wb);
   if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
   const [snapshot] = await db.insert(baseExemploSnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
@@ -297,17 +294,17 @@ router.post("/bases/exemplo/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/exemplo/status", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
+  if (!(await requireAdmin(req, res))) return;
   const [s] = await db.select().from(baseExemploSnapshotsTable).orderBy(desc(baseExemploSnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/020501/upload", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
-  const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
-  if (!fileName || !fileBase64) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  if (!(await requireAdmin(req, res))) return;
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
+  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
-  try { wb = readWorkbook(fileBase64); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
   const rows = getRows(wb);
   if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
   const [snapshot] = await db.insert(base020501SnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
@@ -360,17 +357,17 @@ router.post("/bases/020501/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/020501/status", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
+  if (!(await requireAdmin(req, res))) return;
   const [s] = await db.select().from(base020501SnapshotsTable).orderBy(desc(base020501SnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/020502/upload", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
-  const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
-  if (!fileName || !fileBase64) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  if (!(await requireAdmin(req, res))) return;
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
+  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
-  try { wb = readWorkbook(fileBase64); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
   const rows = getRows(wb);
   if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
   const [snapshot] = await db.insert(base020502SnapshotsTable).values({ fileName, totalRows: rows.length }).returning();
@@ -410,17 +407,17 @@ router.post("/bases/020502/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/020502/status", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
+  if (!(await requireAdmin(req, res))) return;
   const [s] = await db.select().from(base020502SnapshotsTable).orderBy(desc(base020502SnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/producao/upload", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
-  const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
-  if (!fileName || !fileBase64) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
+  if (!(await requireAdmin(req, res))) return;
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
+  if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
-  try { wb = readWorkbook(fileBase64); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
+  try { wb = await readWorkbook({ fileBase64, storagePath, storageBucket }); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
   const rawRows = XLSX.utils.sheet_to_json(wb.Sheets[wb.SheetNames[0]], { header: 1, defval: "" }) as unknown[][];
   if (rawRows.length < 2) { res.status(400).json({ error: "Planilha sem dados" }); return; }
   const headers = (rawRows[0] as string[]).map(normalizeKey);
@@ -447,29 +444,67 @@ router.post("/bases/producao/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/producao/status", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
+  if (!(await requireAdmin(req, res))) return;
   const [s] = await db.select().from(baseProducaoSnapshotsTable).orderBy(desc(baseProducaoSnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/segmentos/upload", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
-  const { fileName, fileBase64 } = req.body as { fileName?: string; fileBase64?: string };
-  if (!fileName || !fileBase64) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
-  let wb: XLSX.WorkBook;
-  try { wb = readWorkbook(fileBase64); } catch { res.status(400).json({ error: "Arquivo inválido" }); return; }
-  const rows = getRows(wb);
-  if (!rows.length) { res.status(400).json({ error: "Planilha sem dados" }); return; }
+  if (!(await requireAdmin(req, res))) return;
 
-  const items: { codigoProduto: number; segmento: string }[] = [];
-  for (const r of rows) {
-    const n = normalizeRow(r);
-    const codigo = parseInt0(n["codigoproduto"] ?? n["codigo"] ?? n["promax"] ?? n["cod"]);
-    const seg = str(n["segmento"] ?? n["segment"] ?? n["segmento_produto"]);
-    if (codigo > 0 && seg) items.push({ codigoProduto: codigo, segmento: seg });
+  const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
+    fileName?: string;
+    fileBase64?: string;
+    storagePath?: string;
+    storageBucket?: string;
+  };
+
+  if (!fileName || (!fileBase64 && !storagePath)) {
+    res.status(400).json({ error: "fileName e fileBase64 obrigatorios" });
+    return;
   }
 
-  if (!items.length) { res.status(400).json({ error: "Nenhum registro válido encontrado. Colunas esperadas: codigo_produto, segmento" }); return; }
+  let wb: XLSX.WorkBook;
+  try {
+    wb = await readWorkbook({ fileBase64, storagePath, storageBucket });
+  } catch {
+    res.status(400).json({ error: "Arquivo invalido" });
+    return;
+  }
+
+  const sheetRows = getRowsFromAllSheets(wb);
+  if (!sheetRows.length) {
+    res.status(400).json({ error: "Planilha sem dados" });
+    return;
+  }
+
+  const itemsByCodigo = new Map<number, { codigoProduto: number; segmento: string }>();
+  for (const { sheetName, row } of sheetRows) {
+    const n = normalizeRow(row);
+    const codigo = parseInt0(
+      n["codigoproduto"] ?? n["codigo"] ?? n["promax"] ?? n["cod"],
+    );
+    const segmento =
+      str(n["segmento"] ?? n["segment"] ?? n["segmento_produto"]) ||
+      sheetName;
+
+    if (codigo > 0 && segmento) {
+      itemsByCodigo.set(codigo, {
+        codigoProduto: codigo,
+        segmento,
+      });
+    }
+  }
+
+  const items = Array.from(itemsByCodigo.values());
+
+  if (!items.length) {
+    res.status(400).json({
+      error:
+        "Nenhum registro valido encontrado. Colunas esperadas: codigo_produto, segmento",
+    });
+    return;
+  }
 
   await db.execute(sql`TRUNCATE produto_segmento RESTART IDENTITY`);
 
@@ -477,12 +512,19 @@ router.post("/bases/segmentos/upload", async (req, res): Promise<void> => {
     await db.insert(produtoSegmentoTable).values(items.slice(i, i + BATCH_SIZE));
   }
 
-  res.json({ success: true, message: `${items.length} classificações importadas`, rowsProcessed: items.length, fileName });
+  res.json({
+    success: true,
+    message: `${items.length} classificacoes importadas`,
+    rowsProcessed: items.length,
+    fileName,
+    sheetsProcessed: wb.SheetNames.length,
+  });
 });
 
 router.get("/bases/segmentos/status", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
-  const [row] = await db.execute(sql`SELECT COUNT(*)::int as total FROM produto_segmento`);
+  if (!(await requireAdmin(req, res))) return;
+  const result = await db.execute(sql`SELECT COUNT(*)::int as total FROM produto_segmento`);
+  const row = result.rows[0];
   const total = row ? Number((row as Record<string, unknown>).total ?? 0) : 0;
   res.json({ totalRows: total, fileName: total > 0 ? "classificacao_segmentos" : null, uploadedAt: null });
 });

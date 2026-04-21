@@ -1,17 +1,9 @@
 import { Router, type IRouter } from "express";
 import { db, estoqueItemsTable, uploadSnapshotsTable } from "@workspace/db";
 import { eq, ilike, and, or, sql, desc } from "drizzle-orm";
+import { requireAdmin } from "../lib/admin-auth";
 
 const router: IRouter = Router();
-
-function requireAdmin(req: Parameters<Parameters<IRouter["get"]>[1]>[0], res: Parameters<Parameters<IRouter["get"]>[1]>[1]): boolean {
-  const userId = (req.session as Record<string, unknown>).userId;
-  if (!userId) {
-    res.status(401).json({ error: "Não autenticado" });
-    return false;
-  }
-  return true;
-}
 
 router.get("/estoque", async (req, res): Promise<void> => {
   const {
@@ -113,7 +105,7 @@ router.get("/estoque/marcas", async (_req, res): Promise<void> => {
 });
 
 router.get("/estoque/dashboard", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
+  if (!(await requireAdmin(req, res))) return;
 
   const latestSnapshot = await db
     .select()
@@ -184,7 +176,7 @@ router.get("/estoque/dashboard", async (req, res): Promise<void> => {
 });
 
 router.get("/estoque/upload-status", async (req, res): Promise<void> => {
-  if (!requireAdmin(req, res)) return;
+  if (!(await requireAdmin(req, res))) return;
 
   const latestSnapshot = await db
     .select()

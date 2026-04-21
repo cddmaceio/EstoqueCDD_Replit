@@ -1,55 +1,160 @@
-import { useState, useEffect } from "react";
-import { useUploadEstoque, useGetEstoqueUploadStatus } from "@workspace/api-client-react";
+﻿import { useState, useEffect, useCallback } from "react";
 import { AdminLayout } from "@/components/layout/admin-layout";
 import { useToast } from "@/hooks/use-toast";
 import { UploadCard, type UploadStatus } from "@/components/upload-card";
 import { Separator } from "@/components/ui/separator";
+import { getApiBaseUrl } from "@/lib/api-base-url";
+import { useAuth } from "@/lib/auth-context";
+import { getSupabaseAccessToken } from "@/lib/supabase";
+import {
+  encodeFileAsBase64,
+  uploadFileToStorage,
+} from "@/lib/storage-upload";
 
-const BASE_URL = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
+const API_BASE_URL = getApiBaseUrl();
 
-function useBaseUpload(endpoint: string) {
+type UploadEndpointConfig = {
+  processPath: string;
+  statusPath: string;
+  storageCategory: string;
+};
+
+function useManagedUpload(
+  config: UploadEndpointConfig,
+  enabled: boolean,
+) {
   const [isUploading, setIsUploading] = useState(false);
   const [status, setStatus] = useState<UploadStatus | undefined>(undefined);
   const [isStatusLoading, setIsStatusLoading] = useState(true);
   const { toast } = useToast();
 
-  const fetchStatus = async () => {
-    setIsStatusLoading(true);
-    try {
-      const res = await fetch(`${BASE_URL}/api/bases/${endpoint}/status`, { credentials: "include" });
-      if (res.ok) setStatus(await res.json());
-    } catch {}
-    setIsStatusLoading(false);
-  };
+  const fetchStatus = useCallback(async () => {
+    if (!enabled) {
+      setStatus(undefined);
+      setIsStatusLoading(false);
+      return;
+    }
 
-  const upload = async (fileName: string, fileBase64: string) => {
-    setIsUploading(true);
+    setIsStatusLoading(true);
+
     try {
-      const res = await fetch(`${BASE_URL}/api/bases/${endpoint}/upload`, {
-        method: "POST",
+      const token = await getSupabaseAccessToken();
+      const res = await fetch(`${API_BASE_URL}${config.statusPath}`, {
         credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ fileName, fileBase64 }),
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
-      const data = await res.json();
+
       if (res.ok) {
-        toast({ title: "Upload concluído", description: `${data.rowsProcessed} registros importados com sucesso.` });
-        fetchStatus();
+        setStatus((await res.json()) as UploadStatus);
       } else {
-        toast({ variant: "destructive", title: "Erro no upload", description: data.error ?? "Falha ao processar o arquivo." });
+        setStatus(undefined);
       }
     } catch {
-      toast({ variant: "destructive", title: "Erro de conexão", description: "Não foi possível conectar ao servidor." });
+      setStatus(undefined);
+    } finally {
+      setIsStatusLoading(false);
     }
-    setIsUploading(false);
-  };
+  }, [config.statusPath, enabled]);
 
-  return { isUploading, status, isStatusLoading, upload, fetchStatus };
+  const upload = useCallback(
+    async (file: File) => {
+      setIsUploading(true);
+
+      try {
+        let requestBody:
+          | { fileName: string; storageBucket: string; storagePath: string }
+          | { fileName: string; fileBase64: string };
+
+        try {
+          requestBody = await uploadFileToStorage(config.storageCategory, file);
+        } catch (storageError) {
+          if (!import.meta.env.DEV) {
+            throw storageError;
+          }
+
+          requestBody = {
+            fileName: file.name,
+            fileBase64: await encodeFileAsBase64(file),
+          };
+        }
+
+        const token = await getSupabaseAccessToken();
+        const res = await fetch(`${API_BASE_URL}${config.processPath}`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify(requestBody),
+        });
+
+        const data = (await res.json()) as {
+          rowsProcessed?: number;
+          error?: string;
+        };
+
+        if (!res.ok) {
+          throw new Error(data.error ?? "Falha ao processar o arquivo.");
+        }
+
+        toast({
+          title: "Upload concluído",
+          description: `${data.rowsProcessed ?? 0} registros importados com sucesso.`,
+        });
+        await fetchStatus();
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : "Não foi possível processar o arquivo.";
+
+        toast({
+          variant: "destructive",
+          title: "Erro no upload",
+          description: message,
+        });
+        throw error;
+      } finally {
+        setIsUploading(false);
+      }
+    },
+    [config.processPath, config.storageCategory, fetchStatus, toast],
+  );
+
+  return {
+    isUploading,
+    status,
+    isStatusLoading,
+    upload,
+    fetchStatus,
+  };
 }
 
-function BaseSection({ endpoint, title, description }: { endpoint: string; title: string; description: string }) {
-  const { isUploading, status, isStatusLoading, upload, fetchStatus } = useBaseUpload(endpoint);
-  useEffect(() => { fetchStatus(); }, []);
+function BaseSection({
+  endpoint,
+  title,
+  description,
+}: {
+  endpoint: string;
+  title: string;
+  description: string;
+}) {
+  const { user, isLoading } = useAuth();
+  const { isUploading, status, isStatusLoading, upload, fetchStatus } =
+    useManagedUpload(
+      {
+        processPath: `/api/bases/${endpoint}/upload`,
+        statusPath: `/api/bases/${endpoint}/status`,
+        storageCategory: `bases/${endpoint}`,
+      },
+      Boolean(user) && !isLoading,
+    );
+
+  useEffect(() => {
+    void fetchStatus();
+  }, [fetchStatus]);
+
   return (
     <UploadCard
       title={title}
@@ -64,24 +169,20 @@ function BaseSection({ endpoint, title, description }: { endpoint: string; title
 }
 
 export default function Upload() {
-  const { toast } = useToast();
-
-  const { data: estoqueStatus, isLoading: estoqueStatusLoading, refetch: refetchEstoqueStatus } = useGetEstoqueUploadStatus();
-  const uploadEstoque = useUploadEstoque({
-    mutation: {
-      onSuccess: (data) => {
-        toast({ title: "Upload concluído", description: `${data.rowsProcessed} registros processados.` });
-        refetchEstoqueStatus();
+  const { user, isLoading } = useAuth();
+  const { isUploading, status, isStatusLoading, upload, fetchStatus } =
+    useManagedUpload(
+      {
+        processPath: "/api/estoque/upload",
+        statusPath: "/api/estoque/upload-status",
+        storageCategory: "estoque",
       },
-      onError: () => {
-        toast({ variant: "destructive", title: "Erro no upload", description: "Não foi possível processar o arquivo." });
-      },
-    },
-  });
+      Boolean(user) && !isLoading,
+    );
 
-  const handleEstoqueUpload = (fileName: string, fileBase64: string) => {
-    uploadEstoque.mutate({ data: { fileName, fileBase64 } });
-  };
+  useEffect(() => {
+    void fetchStatus();
+  }, [fetchStatus]);
 
   return (
     <AdminLayout>
@@ -89,24 +190,27 @@ export default function Upload() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">Gestão de Dados</h1>
           <p className="text-muted-foreground">
-            Atualize as bases do CDD Maceió. Cada seção corresponde a um tipo de arquivo do sistema logístico.
+            Atualize as bases do CDD Maceió. Cada seção corresponde a um tipo
+            de arquivo do sistema logístico.
           </p>
         </div>
 
         <div>
           <div className="flex items-center gap-3 mb-4">
             <div className="h-2 w-2 rounded-full bg-primary" />
-            <h2 className="text-base font-semibold">Base Estoque (Consulta Pública)</h2>
+            <h2 className="text-base font-semibold">
+              Base Estoque (Consulta Pública)
+            </h2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <UploadCard
               title="base_estoque"
               description="Snapshot principal do estoque para a consulta pública. Substitui o snapshot anterior ao importar."
-              status={estoqueStatus ? { fileName: estoqueStatus.fileName ?? null, uploadedAt: estoqueStatus.uploadedAt ?? null, totalRows: estoqueStatus.totalRows ?? null } : undefined}
-              isStatusLoading={estoqueStatusLoading}
-              isUploading={uploadEstoque.isPending}
-              onUpload={handleEstoqueUpload}
-              onRefetch={() => refetchEstoqueStatus()}
+              status={status}
+              isStatusLoading={isStatusLoading}
+              isUploading={isUploading}
+              onUpload={upload}
+              onRefetch={fetchStatus}
             />
           </div>
         </div>
@@ -116,13 +220,15 @@ export default function Upload() {
         <div>
           <div className="flex items-center gap-3 mb-4">
             <div className="h-2 w-2 rounded-full bg-purple-500" />
-            <h2 className="text-base font-semibold">Classificação de Produtos</h2>
+            <h2 className="text-base font-semibold">
+              Classificação de Produtos
+            </h2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <BaseSection
               endpoint="segmentos"
               title="classificacao_segmentos"
-              description="Mapeamento de código Promax → Segmento. Colunas obrigatórias: codigo_produto (Promax), segmento (ex: NAB, Chopp, Alto Giro, Match…). Substitui toda a classificação anterior."
+              description="Mapeamento de código Promax -> Segmento. Colunas obrigatórias: codigo_produto (Promax), segmento (ex: NAB, Choop, Alto Giro, Match...). Substitui toda a classificação anterior."
             />
           </div>
         </div>
@@ -132,7 +238,9 @@ export default function Upload() {
         <div>
           <div className="flex items-center gap-3 mb-4">
             <div className="h-2 w-2 rounded-full bg-blue-500" />
-            <h2 className="text-base font-semibold">Bases do Sistema Logístico</h2>
+            <h2 className="text-base font-semibold">
+              Bases do Sistema Logístico
+            </h2>
           </div>
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <BaseSection
@@ -163,7 +271,7 @@ export default function Upload() {
             <BaseSection
               endpoint="020502"
               title="base_020502"
-              description="Saldo de estoque por depósito (Relatório 020502). Colunas: Armazem, Depósito, Produto, Saldos, Entradas, Saídas, Disponível, Grade Real."
+              description="Saldo de estoque por depósito (Relatório 020502). Colunas: Armazém, Depósito, Produto, Saldos, Entradas, Saídas, Disponível, Grade Real."
             />
             <BaseSection
               endpoint="producao"

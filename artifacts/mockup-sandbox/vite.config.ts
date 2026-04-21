@@ -2,30 +2,49 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
-import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
 import { mockupPreviewPlugin } from "./mockupPreviewPlugin";
+import type { PluginOption } from "vite";
 
-const rawPort = process.env.PORT;
+function resolvePort(rawPort: string | undefined, fallbackPort: number): number {
+  if (!rawPort) {
+    return fallbackPort;
+  }
 
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
+  const port = Number(rawPort);
+
+  if (Number.isNaN(port) || port <= 0) {
+    throw new Error(`Invalid PORT value: "${rawPort}"`);
+  }
+
+  return port;
 }
 
-const port = Number(rawPort);
+async function getReplitPlugins(): Promise<PluginOption[]> {
+  if (process.env.REPL_ID === undefined) {
+    return [];
+  }
 
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
+  const [{ cartographer }, { default: runtimeErrorOverlay }] =
+    await Promise.all([
+      import("@replit/vite-plugin-cartographer"),
+      import("@replit/vite-plugin-runtime-error-modal"),
+    ]);
+
+  const plugins: PluginOption[] = [runtimeErrorOverlay()];
+
+  if (process.env.NODE_ENV !== "production") {
+    plugins.push(
+      cartographer({
+        root: path.resolve(import.meta.dirname, ".."),
+      }),
+    );
+  }
+
+  return plugins;
 }
 
-const basePath = process.env.BASE_PATH;
-
-if (!basePath) {
-  throw new Error(
-    "BASE_PATH environment variable is required but was not provided.",
-  );
-}
+const port = resolvePort(process.env.PORT, 5174);
+const basePath = process.env.BASE_PATH ?? "/";
 
 export default defineConfig({
   base: basePath,
@@ -33,17 +52,7 @@ export default defineConfig({
     mockupPreviewPlugin(),
     react(),
     tailwindcss(),
-    runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
-      ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer({
-              root: path.resolve(import.meta.dirname, ".."),
-            }),
-          ),
-        ]
-      : []),
+    ...(await getReplitPlugins()),
   ],
   resolve: {
     alias: {

@@ -2,49 +2,59 @@ import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "path";
-import runtimeErrorOverlay from "@replit/vite-plugin-runtime-error-modal";
+import type { PluginOption } from "vite";
 
-const rawPort = process.env.PORT;
+function resolvePort(rawPort: string | undefined, fallbackPort: number): number {
+  if (!rawPort) {
+    return fallbackPort;
+  }
 
-if (!rawPort) {
-  throw new Error(
-    "PORT environment variable is required but was not provided.",
-  );
+  const port = Number(rawPort);
+
+  if (Number.isNaN(port) || port <= 0) {
+    throw new Error(`Invalid PORT value: "${rawPort}"`);
+  }
+
+  return port;
 }
 
-const port = Number(rawPort);
+async function getReplitPlugins(): Promise<PluginOption[]> {
+  if (process.env.REPL_ID === undefined) {
+    return [];
+  }
 
-if (Number.isNaN(port) || port <= 0) {
-  throw new Error(`Invalid PORT value: "${rawPort}"`);
+  const [{ cartographer }, { devBanner }, { default: runtimeErrorOverlay }] =
+    await Promise.all([
+      import("@replit/vite-plugin-cartographer"),
+      import("@replit/vite-plugin-dev-banner"),
+      import("@replit/vite-plugin-runtime-error-modal"),
+    ]);
+
+  const plugins: PluginOption[] = [runtimeErrorOverlay()];
+
+  if (process.env.NODE_ENV !== "production") {
+    plugins.push(
+      cartographer({
+        root: path.resolve(import.meta.dirname, ".."),
+      }),
+      devBanner(),
+    );
+  }
+
+  return plugins;
 }
 
-const basePath = process.env.BASE_PATH;
-
-if (!basePath) {
-  throw new Error(
-    "BASE_PATH environment variable is required but was not provided.",
-  );
-}
+const port = resolvePort(process.env.PORT, 5173);
+const basePath = process.env.BASE_PATH ?? "/";
+const apiProxyTarget =
+  process.env.VITE_DEV_API_PROXY_TARGET ?? "http://127.0.0.1:3001";
 
 export default defineConfig({
   base: basePath,
   plugins: [
     react(),
     tailwindcss(),
-    runtimeErrorOverlay(),
-    ...(process.env.NODE_ENV !== "production" &&
-    process.env.REPL_ID !== undefined
-      ? [
-          await import("@replit/vite-plugin-cartographer").then((m) =>
-            m.cartographer({
-              root: path.resolve(import.meta.dirname, ".."),
-            }),
-          ),
-          await import("@replit/vite-plugin-dev-banner").then((m) =>
-            m.devBanner(),
-          ),
-        ]
-      : []),
+    ...(await getReplitPlugins()),
   ],
   resolve: {
     alias: {
@@ -62,6 +72,14 @@ export default defineConfig({
     port,
     host: "0.0.0.0",
     allowedHosts: true,
+    proxy: apiProxyTarget
+      ? {
+          "/api": {
+            target: apiProxyTarget,
+            changeOrigin: true,
+          },
+        }
+      : undefined,
     fs: {
       strict: true,
       deny: ["**/.*"],

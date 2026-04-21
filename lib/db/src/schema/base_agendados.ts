@@ -1,13 +1,19 @@
-import { pgTable, text, serial, timestamp, integer, real } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, real, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const baseAgendadosSnapshotsTable = pgTable("base_agendados_snapshots", {
-  id: serial("id").primaryKey(),
-  fileName: text("file_name").notNull(),
-  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
-  totalRows: integer("total_rows").notNull().default(0),
-});
+export const baseAgendadosSnapshotsTable = pgTable(
+  "base_agendados_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    fileName: text("file_name").notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+    totalRows: integer("total_rows").notNull().default(0),
+  },
+  (table) => ({
+    uploadedAtIdx: index("base_agendados_snapshots_uploaded_at_idx").on(table.uploadedAt),
+  }),
+);
 
 export const baseAgendadosTable = pgTable("base_agendados", {
   id: serial("id").primaryKey(),
@@ -59,7 +65,11 @@ export const baseAgendadosTable = pgTable("base_agendados", {
   numeroNf: text("numero_nf").notNull().default(""),
   dataEmissaoNf: text("data_emissao_nf").notNull().default(""),
   situacaoNf: text("situacao_nf").notNull().default(""),
-});
+}, (table) => ({
+  snapshotIdx: index("base_agendados_snapshot_id_idx").on(table.snapshotId),
+  pedidoIdx: index("base_agendados_numero_pedido_idx").on(table.numeroPedido),
+  produtoIdx: index("base_agendados_cod_produto_idx").on(table.codProduto),
+}));
 
 export const insertBaseAgendadosSchema = createInsertSchema(baseAgendadosTable).omit({ id: true });
 export type InsertBaseAgendados = z.infer<typeof insertBaseAgendadosSchema>;

@@ -20,7 +20,7 @@ interface UploadCardProps {
   status: UploadStatus | undefined;
   isStatusLoading: boolean;
   isUploading: boolean;
-  onUpload: (fileName: string, fileBase64: string) => void;
+  onUpload: (file: File) => Promise<void> | void;
   onRefetch: () => void;
   accept?: string;
 }
@@ -72,19 +72,16 @@ export function UploadCard({
     setSelectedFile(file);
   };
 
-  const handleUpload = () => {
+  const handleUpload = async () => {
     if (!selectedFile) return;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const base64 = e.target?.result?.toString().split(",")[1];
-      if (base64) {
-        onUpload(selectedFile.name, base64);
-        setSelectedFile(null);
-        if (inputRef.current) inputRef.current.value = "";
-        setTimeout(() => onRefetch(), 1000);
-      }
-    };
-    reader.readAsDataURL(selectedFile);
+    try {
+      await onUpload(selectedFile);
+      setSelectedFile(null);
+      if (inputRef.current) inputRef.current.value = "";
+      setTimeout(() => onRefetch(), 1000);
+    } catch {
+      // O toast de erro eh exibido pela tela chamadora.
+    }
   };
 
   const hasData = status?.uploadedAt;

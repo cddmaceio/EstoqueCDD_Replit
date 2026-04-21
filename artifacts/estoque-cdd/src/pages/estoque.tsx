@@ -1,8 +1,21 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { PublicLayout } from "@/components/layout/public-layout";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Search, Loader2, FilterX, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,23 +23,9 @@ import { Card } from "@/components/ui/card";
 import { useDebounce } from "@/hooks/use-debounce";
 import { format } from "date-fns";
 import { ptBR } from "date-fns/locale";
+import { getApiBaseUrl } from "@/lib/api-base-url";
 
-const BASE_URL = import.meta.env.BASE_URL?.replace(/\/$/, "") ?? "";
-
-const SEGMENTOS = [
-  "MKTPLACE",
-  "MONDELEZ-MINALBA",
-  "NAB",
-  "SKU LIMIT",
-  "Alto Giro",
-  "Match",
-  "Megabrands",
-  "Resort",
-  "FOCO_SEAL",
-  "Litrinho",
-  "Chopp",
-  "Multpack",
-];
+const API_BASE_URL = getApiBaseUrl();
 
 interface GradeItem {
   id: number;
@@ -55,7 +54,7 @@ interface GradeResponse {
 }
 
 function stripCode(value: string | null | undefined): string {
-  if (!value) return "—";
+  if (!value) return "-";
   return value.replace(/^\d+\s*-\s*/, "").trim();
 }
 
@@ -73,36 +72,102 @@ function useGradeConsulta(params: {
   const abortRef = useRef<AbortController | null>(null);
 
   const fetchData = useCallback(async () => {
-    if (abortRef.current) abortRef.current.abort();
+    if (abortRef.current) {
+      abortRef.current.abort();
+    }
+
     const controller = new AbortController();
     abortRef.current = controller;
 
     setIsFetching(true);
+
     try {
       const query = new URLSearchParams();
       if (params.search) query.set("search", params.search);
-      if (params.status && params.status !== "all") query.set("status", params.status);
-      if (params.segmento && params.segmento !== "all") query.set("segmento", params.segmento);
-      if (params.curva && params.curva !== "all") query.set("curva", params.curva);
+      if (params.status && params.status !== "all") {
+        query.set("status", params.status);
+      }
+      if (params.segmento && params.segmento !== "all") {
+        query.set("segmento", params.segmento);
+      }
+      if (params.curva && params.curva !== "all") {
+        query.set("curva", params.curva);
+      }
       query.set("page", String(params.page));
       query.set("limit", String(params.limit));
 
-      const res = await fetch(`${BASE_URL}/api/grade/consulta?${query.toString()}`, {
-        signal: controller.signal,
-      });
-      if (res.ok) setData(await res.json());
-    } catch (e: unknown) {
-      if ((e as { name?: string }).name !== "AbortError") console.error(e);
+      const res = await fetch(
+        `${API_BASE_URL}/api/grade/consulta?${query.toString()}`,
+        {
+          signal: controller.signal,
+        },
+      );
+
+      if (res.ok) {
+        setData(await res.json());
+      }
+    } catch (error: unknown) {
+      if ((error as { name?: string }).name !== "AbortError") {
+        console.error(error);
+      }
+    } finally {
+      setIsLoading(false);
+      setIsFetching(false);
     }
-    setIsLoading(false);
-    setIsFetching(false);
-  }, [params.search, params.status, params.segmento, params.curva, params.page, params.limit]);
+  }, [
+    params.curva,
+    params.limit,
+    params.page,
+    params.search,
+    params.segmento,
+    params.status,
+  ]);
 
   useEffect(() => {
-    fetchData();
+    void fetchData();
   }, [fetchData]);
 
   return { data, isLoading, isFetching, refetch: fetchData };
+}
+
+function useSegmentos() {
+  const [segmentos, setSegmentos] = useState<string[]>([]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    const fetchSegmentos = async () => {
+      try {
+        const res = await fetch(`${API_BASE_URL}/api/grade/consulta/segmentos`, {
+          signal: controller.signal,
+        });
+
+        if (!res.ok) return;
+
+        const payload = (await res.json()) as {
+          segmentos?: Array<{ value?: string | null }>;
+        };
+
+        setSegmentos(
+          (payload.segmentos ?? [])
+            .map((item) => item.value?.trim() ?? "")
+            .filter((item) => item.length > 0),
+        );
+      } catch (error: unknown) {
+        if ((error as { name?: string }).name !== "AbortError") {
+          console.error(error);
+        }
+      }
+    };
+
+    void fetchSegmentos();
+
+    return () => {
+      controller.abort();
+    };
+  }, []);
+
+  return segmentos;
 }
 
 export default function Estoque() {
@@ -112,6 +177,7 @@ export default function Estoque() {
   const [segmento, setSegmento] = useState<string>("all");
   const [curva, setCurva] = useState<string>("all");
   const [page, setPage] = useState(1);
+  const segmentos = useSegmentos();
 
   const { data, isLoading, isFetching, refetch } = useGradeConsulta({
     search: debouncedSearch || undefined,
@@ -130,32 +196,78 @@ export default function Estoque() {
     setPage(1);
   };
 
-  const hasActiveFilters = search !== "" || status !== "all" || segmento !== "all" || curva !== "all";
+  const hasActiveFilters =
+    search !== "" || status !== "all" || segmento !== "all" || curva !== "all";
 
   const getSaldoBadge = (saldo: number) => {
-    if (saldo > 0)
+    if (saldo > 0) {
       return (
-        <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 font-mono font-semibold tabular-nums">
+        <Badge
+          variant="outline"
+          className="bg-emerald-50 text-emerald-700 border-emerald-200 font-mono font-semibold tabular-nums"
+        >
           {saldo.toLocaleString("pt-BR")}
         </Badge>
       );
+    }
+
     return (
-      <Badge className="bg-red-100 text-red-700 border-red-200 font-mono font-semibold tabular-nums" variant="outline">
+      <Badge
+        className="bg-red-100 text-red-700 border-red-200 font-mono font-semibold tabular-nums"
+        variant="outline"
+      >
         {saldo.toLocaleString("pt-BR")}
       </Badge>
     );
   };
 
   const getStatusBadge = (saldo: number) => {
-    if (saldo > 0)
-      return <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]">Disponível</Badge>;
-    return <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200 text-[10px]">Ruptura</Badge>;
+    if (saldo > 0) {
+      return (
+        <Badge
+          variant="outline"
+          className="bg-emerald-50 text-emerald-700 border-emerald-200 text-[10px]"
+        >
+          Disponível
+        </Badge>
+      );
+    }
+
+    return (
+      <Badge
+        variant="outline"
+        className="bg-red-50 text-red-700 border-red-200 text-[10px]"
+      >
+        Ruptura
+      </Badge>
+    );
   };
 
-  const getCurvaBadge = (c: string) => {
-    if (c === "A") return <Badge className="bg-blue-600 text-white text-[10px] font-bold w-6 justify-center">A</Badge>;
-    if (c === "B") return <Badge className="bg-amber-500 text-white text-[10px] font-bold w-6 justify-center">B</Badge>;
-    return <Badge variant="outline" className="text-muted-foreground text-[10px] font-bold w-6 justify-center">C</Badge>;
+  const getCurvaBadge = (curvaAtual: string) => {
+    if (curvaAtual === "A") {
+      return (
+        <Badge className="bg-blue-600 text-white text-[10px] font-bold w-6 justify-center">
+          A
+        </Badge>
+      );
+    }
+
+    if (curvaAtual === "B") {
+      return (
+        <Badge className="bg-amber-500 text-white text-[10px] font-bold w-6 justify-center">
+          B
+        </Badge>
+      );
+    }
+
+    return (
+      <Badge
+        variant="outline"
+        className="text-muted-foreground text-[10px] font-bold w-6 justify-center"
+      >
+        C
+      </Badge>
+    );
   };
 
   return (
@@ -163,21 +275,32 @@ export default function Estoque() {
       <div className="max-w-[1500px] mx-auto w-full p-4 md:p-6 space-y-5">
         <div className="flex items-start justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-foreground">Consulta de Estoque</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground">
+              Consulta de Estoque
+            </h1>
             <p className="text-sm text-muted-foreground mt-1">
               Grade de estoque disponível do CDD Maceió.
               {data?.snapshotDate && (
                 <span className="ml-2 text-xs">
                   Atualizado em{" "}
                   <span className="font-medium text-foreground">
-                    {format(new Date(data.snapshotDate), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}
+                    {format(new Date(data.snapshotDate), "dd/MM/yyyy 'às' HH:mm", {
+                      locale: ptBR,
+                    })}
                   </span>
                 </span>
               )}
             </p>
           </div>
-          <Button variant="ghost" size="sm" onClick={() => refetch()} className="shrink-0 text-muted-foreground">
-            <RefreshCw className={`h-4 w-4 mr-1.5 ${isFetching ? "animate-spin" : ""}`} />
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => refetch()}
+            className="shrink-0 text-muted-foreground"
+          >
+            <RefreshCw
+              className={`h-4 w-4 mr-1.5 ${isFetching ? "animate-spin" : ""}`}
+            />
             Atualizar
           </Button>
         </div>
@@ -185,34 +308,57 @@ export default function Estoque() {
         <Card className="p-4 shadow-sm">
           <div className="grid gap-3 md:grid-cols-12 items-end">
             <div className="md:col-span-4 relative">
-              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Produto ou Código</label>
+              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                Produto ou Código
+              </label>
               <Search className="absolute left-3 top-[30px] h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Buscar por descrição ou código..."
                 className="pl-9"
                 value={search}
-                onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setPage(1);
+                }}
               />
             </div>
 
             <div className="md:col-span-3">
-              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Segmento</label>
-              <Select value={segmento} onValueChange={(val) => { setSegmento(val); setPage(1); }}>
+              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                Segmento
+              </label>
+              <Select
+                value={segmento}
+                onValueChange={(value) => {
+                  setSegmento(value);
+                  setPage(1);
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Todos os segmentos" />
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Todos os segmentos</SelectItem>
-                  {SEGMENTOS.map((s) => (
-                    <SelectItem key={s} value={s}>{s}</SelectItem>
+                  {segmentos.map((item) => (
+                    <SelectItem key={item} value={item}>
+                      {item}
+                    </SelectItem>
                   ))}
                 </SelectContent>
               </Select>
             </div>
 
             <div className="md:col-span-2">
-              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Curva ABC</label>
-              <Select value={curva} onValueChange={(val) => { setCurva(val); setPage(1); }}>
+              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                Curva ABC
+              </label>
+              <Select
+                value={curva}
+                onValueChange={(value) => {
+                  setCurva(value);
+                  setPage(1);
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Todas" />
                 </SelectTrigger>
@@ -226,8 +372,16 @@ export default function Estoque() {
             </div>
 
             <div className="md:col-span-1">
-              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">Situação</label>
-              <Select value={status} onValueChange={(val) => { setStatus(val); setPage(1); }}>
+              <label className="text-xs font-medium mb-1.5 block text-muted-foreground">
+                Situação
+              </label>
+              <Select
+                value={status}
+                onValueChange={(value) => {
+                  setStatus(value);
+                  setPage(1);
+                }}
+              >
                 <SelectTrigger>
                   <SelectValue placeholder="Todos" />
                 </SelectTrigger>
@@ -243,7 +397,9 @@ export default function Estoque() {
               <Button
                 variant="ghost"
                 size="sm"
-                className={`w-full ${hasActiveFilters ? "text-primary" : "text-muted-foreground"}`}
+                className={`w-full ${
+                  hasActiveFilters ? "text-primary" : "text-muted-foreground"
+                }`}
                 onClick={clearFilters}
               >
                 <FilterX className="h-4 w-4 mr-1" />
@@ -254,7 +410,10 @@ export default function Estoque() {
             <div className="md:col-span-1 flex items-end justify-end">
               {data && (
                 <span className="text-xs text-muted-foreground whitespace-nowrap text-right">
-                  <span className="font-semibold text-foreground">{data.total.toLocaleString("pt-BR")}</span> SKUs
+                  <span className="font-semibold text-foreground">
+                    {data.total.toLocaleString("pt-BR")}
+                  </span>{" "}
+                  SKUs
                 </span>
               )}
             </div>
@@ -278,10 +437,16 @@ export default function Estoque() {
                   <TableHead className="w-[55px]">Un.</TableHead>
                   <TableHead className="w-[130px]">Embalagem</TableHead>
                   <TableHead className="w-[120px]">Segmento</TableHead>
-                  <TableHead className="text-right w-[95px]">Grade Cad.</TableHead>
-                  <TableHead className="text-right w-[70px]">Reserva</TableHead>
+                  <TableHead className="text-right w-[95px]">
+                    Grade Cad.
+                  </TableHead>
+                  <TableHead className="text-right w-[70px]">
+                    Reserva
+                  </TableHead>
                   <TableHead className="text-right w-[70px]">Saída</TableHead>
-                  <TableHead className="text-right w-[100px]">Saldo Disp.</TableHead>
+                  <TableHead className="text-right w-[100px]">
+                    Saldo Disp.
+                  </TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -293,7 +458,10 @@ export default function Estoque() {
                   </TableRow>
                 ) : !data || data.items.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={11} className="h-40 text-center text-muted-foreground">
+                    <TableCell
+                      colSpan={11}
+                      className="h-40 text-center text-muted-foreground"
+                    >
                       {data === null
                         ? "Nenhum dado de grade carregado. Faça o upload da base_grade no painel administrativo."
                         : "Nenhum produto encontrado com os filtros aplicados."}
@@ -301,34 +469,58 @@ export default function Estoque() {
                   </TableRow>
                 ) : (
                   data.items.map((item) => (
-                    <TableRow key={item.id as number} className="hover:bg-muted/30 transition-colors">
-                      <TableCell>{getStatusBadge(item.saldoDisponivel)}</TableCell>
-                      <TableCell className="text-center">{getCurvaBadge(item.curva)}</TableCell>
-                      <TableCell className="font-mono text-xs text-muted-foreground">{item.codigoProduto as number}</TableCell>
-                      <TableCell className="font-medium text-xs leading-tight">{item.descricaoProduto as string}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{item.unidadeMedida as string}</TableCell>
-                      <TableCell className="text-xs text-muted-foreground">{stripCode(item.embalagem)}</TableCell>
+                    <TableRow
+                      key={item.id}
+                      className="hover:bg-muted/30 transition-colors"
+                    >
+                      <TableCell>
+                        {getStatusBadge(item.saldoDisponivel)}
+                      </TableCell>
+                      <TableCell className="text-center">
+                        {getCurvaBadge(item.curva)}
+                      </TableCell>
+                      <TableCell className="font-mono text-xs text-muted-foreground">
+                        {item.codigoProduto}
+                      </TableCell>
+                      <TableCell className="font-medium text-xs leading-tight">
+                        {item.descricaoProduto}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {item.unidadeMedida}
+                      </TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {stripCode(item.embalagem)}
+                      </TableCell>
                       <TableCell className="text-xs">
                         {item.segmento ? (
-                          <Badge variant="outline" className="text-[10px] font-medium">{item.segmento as string}</Badge>
+                          <Badge
+                            variant="outline"
+                            className="text-[10px] font-medium"
+                          >
+                            {item.segmento}
+                          </Badge>
                         ) : (
-                          <span className="text-muted-foreground">—</span>
+                          <span className="text-muted-foreground">-</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                        {(item.gradeCadastrada as number).toLocaleString("pt-BR")}
+                        {item.gradeCadastrada.toLocaleString("pt-BR")}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs tabular-nums">
-                        {(item.reserva as number) > 0 ? (
-                          <span className="text-amber-600 font-semibold">{(item.reserva as number).toLocaleString("pt-BR")}</span>
+                        {item.reserva > 0 ? (
+                          <span className="text-amber-600 font-semibold">
+                            {item.reserva.toLocaleString("pt-BR")}
+                          </span>
                         ) : (
                           <span className="text-muted-foreground">0</span>
                         )}
                       </TableCell>
                       <TableCell className="text-right font-mono text-xs text-muted-foreground tabular-nums">
-                        {(item.saida as number).toLocaleString("pt-BR")}
+                        {item.saida.toLocaleString("pt-BR")}
                       </TableCell>
-                      <TableCell className="text-right">{getSaldoBadge(item.saldoDisponivel)}</TableCell>
+                      <TableCell className="text-right">
+                        {getSaldoBadge(item.saldoDisponivel)}
+                      </TableCell>
                     </TableRow>
                   ))
                 )}
@@ -339,16 +531,30 @@ export default function Estoque() {
           {data && data.totalPages > 1 && (
             <div className="border-t p-4 flex items-center justify-between bg-muted/20 gap-4 flex-wrap">
               <div className="text-xs text-muted-foreground">
-                Página {page} de {data.totalPages} —{" "}
+                Página {page} de {data.totalPages} -{" "}
                 {((page - 1) * 20 + 1).toLocaleString("pt-BR")} a{" "}
                 {Math.min(page * 20, data.total).toLocaleString("pt-BR")} de{" "}
                 {data.total.toLocaleString("pt-BR")} SKUs
               </div>
               <div className="flex items-center gap-2">
-                <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setPage((current) => Math.max(1, current - 1))}
+                  disabled={page === 1}
+                >
                   Anterior
                 </Button>
-                <Button variant="outline" size="sm" onClick={() => setPage((p) => Math.min(data.totalPages, p + 1))} disabled={page === data.totalPages}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setPage((current) =>
+                      Math.min(data.totalPages, current + 1),
+                    )
+                  }
+                  disabled={page === data.totalPages}
+                >
                   Próxima
                 </Button>
               </div>

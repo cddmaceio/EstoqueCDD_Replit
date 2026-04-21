@@ -31,22 +31,22 @@ app.use(express.json({ limit: "50mb" }));
 app.use(express.urlencoded({ extended: true, limit: "50mb" }));
 
 const sessionSecret = process.env.SESSION_SECRET;
-if (!sessionSecret) {
-  throw new Error("SESSION_SECRET environment variable is required");
+if (sessionSecret) {
+  app.use(
+    session({
+      secret: sessionSecret,
+      resave: false,
+      saveUninitialized: false,
+      cookie: {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        maxAge: 24 * 60 * 60 * 1000,
+      },
+    }),
+  );
+} else {
+  logger.warn("SESSION_SECRET not set, legacy session auth disabled");
 }
-
-app.use(
-  session({
-    secret: sessionSecret,
-    resave: false,
-    saveUninitialized: false,
-    cookie: {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 24 * 60 * 60 * 1000,
-    },
-  }),
-);
 
 app.use("/api", router);
 

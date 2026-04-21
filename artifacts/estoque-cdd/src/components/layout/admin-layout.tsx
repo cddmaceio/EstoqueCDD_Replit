@@ -1,24 +1,24 @@
-import { ReactNode } from "react";
+import { ReactNode, useEffect } from "react";
 import { Link, useLocation } from "wouter";
-import { useAdminLogout, useGetAuthMe } from "@workspace/api-client-react";
-import { LayoutDashboard, Upload, LogOut, PackageSearch, Loader2 } from "lucide-react";
+import {
+  LayoutDashboard,
+  Upload,
+  LogOut,
+  PackageSearch,
+  Loader2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/lib/auth-context";
 
 export function AdminLayout({ children }: { children: ReactNode }) {
   const [, setLocation] = useLocation();
-  const { data: user, isLoading, isError } = useGetAuthMe({
-    query: {
-      retry: false,
-    }
-  });
+  const { user, isLoading, signOut } = useAuth();
 
-  const logout = useAdminLogout({
-    mutation: {
-      onSuccess: () => {
-        setLocation("/");
-      }
+  useEffect(() => {
+    if (!isLoading && !user) {
+      setLocation("/");
     }
-  });
+  }, [isLoading, setLocation, user]);
 
   if (isLoading) {
     return (
@@ -28,8 +28,7 @@ export function AdminLayout({ children }: { children: ReactNode }) {
     );
   }
 
-  if (isError || !user) {
-    setLocation("/");
+  if (!user) {
     return null;
   }
 
@@ -43,15 +42,24 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           </div>
         </div>
         <nav className="flex-1 p-4 space-y-1">
-          <Link href="/admin/dashboard" className="flex items-center gap-3 px-3 py-2 text-sm rounded-md text-sidebar-foreground hover:bg-sidebar-accent transition-colors">
+          <Link
+            href="/admin/dashboard"
+            className="flex items-center gap-3 px-3 py-2 text-sm rounded-md text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+          >
             <LayoutDashboard className="h-4 w-4" />
             Dashboard
           </Link>
-          <Link href="/admin/upload" className="flex items-center gap-3 px-3 py-2 text-sm rounded-md text-sidebar-foreground hover:bg-sidebar-accent transition-colors">
+          <Link
+            href="/admin/upload"
+            className="flex items-center gap-3 px-3 py-2 text-sm rounded-md text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+          >
             <Upload className="h-4 w-4" />
             Upload Base
           </Link>
-          <Link href="/estoque" className="flex items-center gap-3 px-3 py-2 text-sm rounded-md text-sidebar-foreground hover:bg-sidebar-accent transition-colors">
+          <Link
+            href="/estoque"
+            className="flex items-center gap-3 px-3 py-2 text-sm rounded-md text-sidebar-foreground hover:bg-sidebar-accent transition-colors"
+          >
             <PackageSearch className="h-4 w-4" />
             Consulta Pública
           </Link>
@@ -60,11 +68,14 @@ export function AdminLayout({ children }: { children: ReactNode }) {
           <div className="text-xs text-sidebar-foreground/60 mb-2 px-1 truncate">
             {user.email}
           </div>
-          <Button 
-            variant="ghost" 
-            className="w-full justify-start text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground" 
-            onClick={() => logout.mutate()}
-            disabled={logout.isPending}
+          <Button
+            variant="ghost"
+            className="w-full justify-start text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
+            onClick={() => {
+              void signOut().then(() => {
+                setLocation("/");
+              });
+            }}
           >
             <LogOut className="h-4 w-4 mr-2" />
             Sair
@@ -79,12 +90,10 @@ export function AdminLayout({ children }: { children: ReactNode }) {
             CDD Maceió
           </div>
           <div className="ml-auto flex items-center gap-4">
-            <span className="text-sm font-medium">{user.name}</span>
+            <span className="text-sm font-medium">{user.displayName}</span>
           </div>
         </header>
-        <div className="flex-1 p-4 md:p-6 overflow-auto">
-          {children}
-        </div>
+        <div className="flex-1 p-4 md:p-6 overflow-auto">{children}</div>
       </main>
     </div>
   );

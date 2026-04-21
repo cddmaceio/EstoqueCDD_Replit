@@ -1,13 +1,19 @@
-import { pgTable, text, serial, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const base020502SnapshotsTable = pgTable("base_020502_snapshots", {
-  id: serial("id").primaryKey(),
-  fileName: text("file_name").notNull(),
-  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
-  totalRows: integer("total_rows").notNull().default(0),
-});
+export const base020502SnapshotsTable = pgTable(
+  "base_020502_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    fileName: text("file_name").notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+    totalRows: integer("total_rows").notNull().default(0),
+  },
+  (table) => ({
+    uploadedAtIdx: index("base_020502_snapshots_uploaded_at_idx").on(table.uploadedAt),
+  }),
+);
 
 export const base020502Table = pgTable("base_020502", {
   id: serial("id").primaryKey(),
@@ -35,7 +41,10 @@ export const base020502Table = pgTable("base_020502", {
   saldoUnitario: text("saldo_unitario").notNull().default(""),
   saldoAtualReal: text("saldo_atual_real").notNull().default(""),
   saldoGradeReal: text("saldo_grade_real").notNull().default(""),
-});
+}, (table) => ({
+  snapshotIdx: index("base_020502_snapshot_id_idx").on(table.snapshotId),
+  produtoIdx: index("base_020502_produto_idx").on(table.produto),
+}));
 
 export const insertBase020502Schema = createInsertSchema(base020502Table).omit({ id: true });
 export type InsertBase020502 = z.infer<typeof insertBase020502Schema>;

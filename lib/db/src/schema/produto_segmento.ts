@@ -1,12 +1,18 @@
-import { pgTable, text, serial, integer } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, integer, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const produtoSegmentoTable = pgTable("produto_segmento", {
-  id: serial("id").primaryKey(),
-  codigoProduto: integer("codigo_produto").notNull().unique(),
-  segmento: text("segmento").notNull(),
-});
+export const produtoSegmentoTable = pgTable(
+  "produto_segmento",
+  {
+    id: serial("id").primaryKey(),
+    codigoProduto: integer("codigo_produto").notNull().unique(),
+    segmento: text("segmento").notNull(),
+  },
+  (table) => ({
+    segmentoIdx: index("produto_segmento_segmento_idx").on(table.segmento),
+  }),
+);
 
 export const insertProdutoSegmentoSchema = createInsertSchema(produtoSegmentoTable).omit({ id: true });
 export type InsertProdutoSegmento = z.infer<typeof insertProdutoSegmentoSchema>;

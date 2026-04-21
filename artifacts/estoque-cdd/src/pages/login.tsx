@@ -1,14 +1,28 @@
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
 import { useLocation } from "wouter";
-import { useAdminLogin } from "@workspace/api-client-react";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Form, FormControl, FormField, FormItem, FormLabel, FormMessage } from "@/components/ui/form";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+} from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { PackageSearch, Loader2, ArrowRight } from "lucide-react";
 import { Link } from "wouter";
+import { useAuth } from "@/lib/auth-context";
 
 const loginSchema = z.object({
   email: z.string().email("Email inválido"),
@@ -17,13 +31,8 @@ const loginSchema = z.object({
 
 export default function Login() {
   const [, setLocation] = useLocation();
-  const loginMutation = useAdminLogin({
-    mutation: {
-      onSuccess: () => {
-        setLocation("/admin/dashboard");
-      }
-    }
-  });
+  const { signInWithPassword, isLoading } = useAuth();
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   const form = useForm<z.infer<typeof loginSchema>>({
     resolver: zodResolver(loginSchema),
@@ -33,8 +42,19 @@ export default function Login() {
     },
   });
 
-  const onSubmit = (values: z.infer<typeof loginSchema>) => {
-    loginMutation.mutate({ data: values });
+  const onSubmit = async (values: z.infer<typeof loginSchema>) => {
+    setErrorMessage(null);
+
+    try {
+      await signInWithPassword(values.email, values.password);
+      setLocation("/admin/dashboard");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error
+          ? error.message
+          : "Credenciais inválidas. Tente novamente.",
+      );
+    }
   };
 
   return (
@@ -45,17 +65,24 @@ export default function Login() {
             <PackageSearch className="h-6 w-6" />
           </div>
           <h1 className="text-2xl font-bold tracking-tight">CDD Maceió</h1>
-          <p className="text-sm text-muted-foreground">Sistema de Gestão de Estoque</p>
+          <p className="text-sm text-muted-foreground">
+            Sistema de Gestão de Estoque
+          </p>
         </div>
 
         <Card className="border-border shadow-sm">
           <CardHeader>
             <CardTitle>Acesso Administrativo</CardTitle>
-            <CardDescription>Entre com suas credenciais para gerenciar o estoque.</CardDescription>
+            <CardDescription>
+              Entre com suas credenciais para gerenciar o estoque.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <Form {...form}>
-              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+              <form
+                onSubmit={form.handleSubmit(onSubmit)}
+                className="space-y-4"
+              >
                 <FormField
                   control={form.control}
                   name="email"
@@ -82,15 +109,15 @@ export default function Login() {
                     </FormItem>
                   )}
                 />
-                
-                {loginMutation.isError && (
+
+                {errorMessage && (
                   <div className="text-sm text-destructive font-medium p-2 bg-destructive/10 rounded-md">
-                    Credenciais inválidas. Tente novamente.
+                    {errorMessage}
                   </div>
                 )}
 
-                <Button type="submit" className="w-full" disabled={loginMutation.isPending}>
-                  {loginMutation.isPending ? (
+                <Button type="submit" className="w-full" disabled={isLoading}>
+                  {isLoading ? (
                     <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
                     "Entrar"
@@ -102,7 +129,10 @@ export default function Login() {
         </Card>
 
         <div className="text-center">
-          <Link href="/estoque" className="inline-flex items-center justify-center text-sm text-muted-foreground hover:text-primary transition-colors font-medium">
+          <Link
+            href="/estoque"
+            className="inline-flex items-center justify-center text-sm text-muted-foreground hover:text-primary transition-colors font-medium"
+          >
             Acessar consulta pública de estoque
             <ArrowRight className="h-4 w-4 ml-1" />
           </Link>

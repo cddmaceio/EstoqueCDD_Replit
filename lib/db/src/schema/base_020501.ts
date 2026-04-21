@@ -1,13 +1,19 @@
-import { pgTable, text, serial, timestamp, integer, real } from "drizzle-orm/pg-core";
+import { pgTable, text, serial, timestamp, integer, real, index } from "drizzle-orm/pg-core";
 import { createInsertSchema } from "drizzle-zod";
 import { z } from "zod/v4";
 
-export const base020501SnapshotsTable = pgTable("base_020501_snapshots", {
-  id: serial("id").primaryKey(),
-  fileName: text("file_name").notNull(),
-  uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
-  totalRows: integer("total_rows").notNull().default(0),
-});
+export const base020501SnapshotsTable = pgTable(
+  "base_020501_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    fileName: text("file_name").notNull(),
+    uploadedAt: timestamp("uploaded_at", { withTimezone: true }).notNull().defaultNow(),
+    totalRows: integer("total_rows").notNull().default(0),
+  },
+  (table) => ({
+    uploadedAtIdx: index("base_020501_snapshots_uploaded_at_idx").on(table.uploadedAt),
+  }),
+);
 
 export const base020501Table = pgTable("base_020501", {
   id: serial("id").primaryKey(),
@@ -48,7 +54,11 @@ export const base020501Table = pgTable("base_020501", {
   motivo: text("motivo").notNull().default(""),
   dtValidade: text("dt_validade").notNull().default(""),
   lote: text("lote").notNull().default(""),
-});
+}, (table) => ({
+  snapshotIdx: index("base_020501_snapshot_id_idx").on(table.snapshotId),
+  itemIdx: index("base_020501_item_idx").on(table.item),
+  dataIdx: index("base_020501_data_idx").on(table.data),
+}));
 
 export const insertBase020501Schema = createInsertSchema(base020501Table).omit({ id: true });
 export type InsertBase020501 = z.infer<typeof insertBase020501Schema>;

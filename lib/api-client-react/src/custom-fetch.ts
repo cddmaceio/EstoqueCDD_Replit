@@ -359,8 +359,14 @@ export async function customFetch<T = unknown>(
   }
 
   const requestInfo = { method, url: resolveUrl(input) };
+  const credentials = init.credentials ?? "include";
 
-  const response = await fetch(input, { ...init, method, headers });
+  const response = await fetch(input, {
+    ...init,
+    method,
+    headers,
+    credentials,
+  });
 
   if (!response.ok) {
     const errorData = await parseErrorBody(response, method);
