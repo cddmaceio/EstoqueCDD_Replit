@@ -79,6 +79,28 @@ async function insertEstoqueRows(
   }
 }
 
+async function keepOnlyLatestEstoqueSnapshot(currentSnapshotId: number): Promise<void> {
+  const client = getSupabaseWriteClient();
+
+  const { error: rowsError } = await client
+    .from("estoque_items")
+    .delete()
+    .neq("snapshot_id", currentSnapshotId);
+
+  if (rowsError) {
+    throw rowsError;
+  }
+
+  const { error: snapshotsError } = await client
+    .from("upload_snapshots")
+    .delete()
+    .neq("id", currentSnapshotId);
+
+  if (snapshotsError) {
+    throw snapshotsError;
+  }
+}
+
 function normalizeHeader(header: string): string {
   return header
     .toLowerCase()
@@ -228,6 +250,8 @@ router.post("/estoque/upload", async (req, res): Promise<void> => {
 
       await insertEstoqueRows(batch);
     }
+
+    await keepOnlyLatestEstoqueSnapshot(snapshot.id);
 
     res.json({
       success: true,

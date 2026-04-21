@@ -101,6 +101,32 @@ async function insertRows(table: string, rows: DbRow[]): Promise<void> {
   }
 }
 
+async function keepOnlyLatestSnapshot(
+  dataTable: string,
+  snapshotTable: string,
+  currentSnapshotId: number,
+): Promise<void> {
+  const client = getSupabaseReadClient();
+
+  const { error: rowsError } = await client
+    .from(dataTable)
+    .delete()
+    .neq("snapshot_id", currentSnapshotId);
+
+  if (rowsError) {
+    throw rowsError;
+  }
+
+  const { error: snapshotsError } = await client
+    .from(snapshotTable)
+    .delete()
+    .neq("id", currentSnapshotId);
+
+  if (snapshotsError) {
+    throw snapshotsError;
+  }
+}
+
 function camelToSnake(key: string): string {
   if (key === "ean1") {
     return "ean_trib";
@@ -226,6 +252,7 @@ router.post("/bases/grade/upload", async (req, res): Promise<void> => {
     for (let i = 0; i < items.length; i += BATCH_SIZE) {
       await insertRows("base_grade", items.slice(i, i + BATCH_SIZE));
     }
+    await keepOnlyLatestSnapshot("base_grade", "base_grade_snapshots", snapshot.id);
     res.json({
       success: true,
       message: `${items.length} itens importados`,
@@ -312,6 +339,7 @@ router.post("/bases/0111/upload", async (req, res): Promise<void> => {
     for (let i = 0; i < items.length; i += BATCH_SIZE) {
       await insertRows("base_0111", items.slice(i, i + BATCH_SIZE));
     }
+    await keepOnlyLatestSnapshot("base_0111", "base_0111_snapshots", snapshot.id);
     res.json({
       success: true,
       message: `${items.length} itens importados`,
@@ -410,6 +438,11 @@ router.post("/bases/agendados/upload", async (req, res): Promise<void> => {
     for (let i = 0; i < items.length; i += BATCH_SIZE) {
       await insertRows("base_agendados", items.slice(i, i + BATCH_SIZE));
     }
+    await keepOnlyLatestSnapshot(
+      "base_agendados",
+      "base_agendados_snapshots",
+      snapshot.id,
+    );
     res.json({
       success: true,
       message: `${items.length} itens importados`,
@@ -473,6 +506,7 @@ router.post("/bases/exemplo/upload", async (req, res): Promise<void> => {
     for (let i = 0; i < items.length; i += BATCH_SIZE) {
       await insertRows("base_exemplo", items.slice(i, i + BATCH_SIZE));
     }
+    await keepOnlyLatestSnapshot("base_exemplo", "base_exemplo_snapshots", snapshot.id);
     res.json({
       success: true,
       message: `${items.length} itens importados`,
@@ -558,6 +592,7 @@ router.post("/bases/020501/upload", async (req, res): Promise<void> => {
     for (let i = 0; i < items.length; i += BATCH_SIZE) {
       await insertRows("base_020501", items.slice(i, i + BATCH_SIZE));
     }
+    await keepOnlyLatestSnapshot("base_020501", "base_020501_snapshots", snapshot.id);
     res.json({
       success: true,
       message: `${items.length} itens importados`,
@@ -630,6 +665,7 @@ router.post("/bases/020502/upload", async (req, res): Promise<void> => {
     for (let i = 0; i < items.length; i += BATCH_SIZE) {
       await insertRows("base_020502", items.slice(i, i + BATCH_SIZE));
     }
+    await keepOnlyLatestSnapshot("base_020502", "base_020502_snapshots", snapshot.id);
     res.json({
       success: true,
       message: `${items.length} itens importados`,
@@ -696,6 +732,11 @@ router.post("/bases/producao/upload", async (req, res): Promise<void> => {
     for (let i = 0; i < items.length; i += BATCH_SIZE) {
       await insertRows("base_producao", items.slice(i, i + BATCH_SIZE));
     }
+    await keepOnlyLatestSnapshot(
+      "base_producao",
+      "base_producao_snapshots",
+      snapshot.id,
+    );
     res.json({
       success: true,
       message: `${items.length} itens importados`,
