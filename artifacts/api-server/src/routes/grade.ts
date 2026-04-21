@@ -27,6 +27,7 @@ const STATIC_SEGMENTOS = [
   "FOCO_SEAL",
   "Litrinho",
   "Chopp",
+  "Multpack",
 ];
 
 router.get("/grade/consulta/segmentos", async (_req, res): Promise<void> => {

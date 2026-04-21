@@ -25,6 +25,7 @@ const SEGMENTOS = [
   "FOCO_SEAL",
   "Litrinho",
   "Chopp",
+  "Multpack",
 ];
 
 interface GradeItem {
