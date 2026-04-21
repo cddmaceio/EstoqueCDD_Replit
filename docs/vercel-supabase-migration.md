@@ -1,9 +1,9 @@
 # Vercel + Supabase Migration
 
-Este projeto foi desacoplado do runtime do Replit para rodar com:
+Este projeto foi desacoplado do runtime antigo para rodar com:
 
 - Frontend Vite em Vercel
-- API Express exposta por `api/index.js` e `api/[...path].js` como function Node
+- API Express empacotada em `apps/api` e exposta na Vercel via `infra/vercel/api`
 - PostgreSQL no Supabase
 - Auth em transicao: Supabase Auth com fallback legado por email/senha
 
@@ -89,8 +89,9 @@ Observacoes:
 ## Configuracao Vercel aplicada
 
 - O frontend continua sendo publicado como app Vite estatico.
-- O `buildCommand` gera primeiro o bundle do backend (`artifacts/api-server/dist/app.mjs`) e depois o build do frontend.
-- A API Express fica exposta por `api/index.js` e `api/[...path].js`, apontando para o bundle pronto do backend.
+- O `buildCommand` gera primeiro o bundle do backend (`apps/api/dist/app.mjs`) e depois o build do frontend em `apps/web`.
+- Os handlers reais de deploy ficam em `infra/vercel/api`.
+- A pasta raiz `api/` foi mantida como shim de compatibilidade para a descoberta de functions da Vercel.
 - O `vercel.json` configura `maxDuration` de 300 segundos para as funcoes da pasta `api`.
 
 ## Validacoes locais
