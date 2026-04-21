@@ -1,5 +1,5 @@
 import type { Request, Response } from "express";
-import { db, adminUsersTable, type AdminUser } from "@workspace/db";
+import { getDb, adminUsersTable, type AdminUser } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 type AuthenticatedAdmin = Pick<
@@ -23,6 +23,7 @@ function getBearerToken(req: Request): string | null {
 }
 
 async function getAdminById(id: number): Promise<AuthenticatedAdmin | null> {
+  const db = getDb();
   const [user] = await db
     .select({
       id: adminUsersTable.id,
@@ -39,6 +40,7 @@ async function getAdminById(id: number): Promise<AuthenticatedAdmin | null> {
 async function getAdminByEmail(
   email: string,
 ): Promise<AuthenticatedAdmin | null> {
+  const db = getDb();
   const [user] = await db
     .select({
       id: adminUsersTable.id,
@@ -55,6 +57,7 @@ async function getAdminByEmail(
 async function getAdminByAuthUserId(
   authUserId: string,
 ): Promise<AuthenticatedAdmin | null> {
+  const db = getDb();
   const [user] = await db
     .select({
       id: adminUsersTable.id,

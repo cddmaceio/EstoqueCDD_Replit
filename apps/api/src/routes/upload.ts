@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, estoqueItemsTable, uploadSnapshotsTable } from "@workspace/db";
+import { getDb, estoqueItemsTable, uploadSnapshotsTable } from "@workspace/db";
 import { desc } from "drizzle-orm";
 import * as XLSX from "xlsx";
 import { requireAdmin } from "../lib/admin-auth";
@@ -91,6 +91,8 @@ router.post("/estoque/upload", async (req, res): Promise<void> => {
     return;
   }
 
+  const db = getDb();
+
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
     fileName?: string;
     fileBase64?: string;
@@ -176,3 +178,4 @@ router.post("/estoque/upload", async (req, res): Promise<void> => {
 });
 
 export default router;
+

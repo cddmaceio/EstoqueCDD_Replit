@@ -1,11 +1,16 @@
 import { Router, type IRouter } from "express";
-import { db, estoqueItemsTable, uploadSnapshotsTable } from "@workspace/db";
+import {
+  getDb,
+  estoqueItemsTable,
+  uploadSnapshotsTable,
+} from "@workspace/db";
 import { eq, ilike, and, or, sql, desc } from "drizzle-orm";
 import { requireAdmin } from "../lib/admin-auth";
 
 const router: IRouter = Router();
 
 router.get("/estoque", async (req, res): Promise<void> => {
+  const db = getDb();
   const {
     search,
     marca,
@@ -26,12 +31,17 @@ router.get("/estoque", async (req, res): Promise<void> => {
     .limit(1);
 
   if (latestSnapshot.length === 0) {
-    res.json({ items: [], total: 0, page: pageNum, limit: limitNum, totalPages: 0 });
+    res.json({
+      items: [],
+      total: 0,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: 0,
+    });
     return;
   }
 
   const snapshotId = latestSnapshot[0].id;
-
   const conditions = [eq(estoqueItemsTable.snapshotId, snapshotId)];
 
   if (search) {
@@ -70,18 +80,17 @@ router.get("/estoque", async (req, res): Promise<void> => {
     .limit(limitNum)
     .offset(offset);
 
-  const totalPages = Math.ceil(count / limitNum);
-
   res.json({
     items,
     total: count,
     page: pageNum,
     limit: limitNum,
-    totalPages,
+    totalPages: Math.ceil(count / limitNum),
   });
 });
 
 router.get("/estoque/marcas", async (_req, res): Promise<void> => {
+  const db = getDb();
   const latestSnapshot = await db
     .select()
     .from(uploadSnapshotsTable)
@@ -94,7 +103,6 @@ router.get("/estoque/marcas", async (_req, res): Promise<void> => {
   }
 
   const snapshotId = latestSnapshot[0].id;
-
   const marcas = await db
     .selectDistinct({ marca: estoqueItemsTable.marca })
     .from(estoqueItemsTable)
@@ -105,6 +113,7 @@ router.get("/estoque/marcas", async (_req, res): Promise<void> => {
 });
 
 router.get("/estoque/dashboard", async (req, res): Promise<void> => {
+  const db = getDb();
   if (!(await requireAdmin(req, res))) return;
 
   const latestSnapshot = await db
@@ -148,7 +157,7 @@ router.get("/estoque/dashboard", async (req, res): Promise<void> => {
       marca: estoqueItemsTable.marca,
       total: sql<number>`count(*)::int`,
       curva: sql<string>`
-        case 
+        case
           when count(*) >= (select count(*) * 0.2 from estoque_items where snapshot_id = ${snapshotId}) then 'A'
           when count(*) >= (select count(*) * 0.1 from estoque_items where snapshot_id = ${snapshotId}) then 'B'
           else 'C'
@@ -176,6 +185,7 @@ router.get("/estoque/dashboard", async (req, res): Promise<void> => {
 });
 
 router.get("/estoque/upload-status", async (req, res): Promise<void> => {
+  const db = getDb();
   if (!(await requireAdmin(req, res))) return;
 
   const latestSnapshot = await db

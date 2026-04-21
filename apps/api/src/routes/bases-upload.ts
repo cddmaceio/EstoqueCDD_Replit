@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db } from "@workspace/db";
+import { getDb } from "@workspace/db";
 import {
   baseGradeSnapshotsTable,
   baseGradeTable,
@@ -89,7 +89,8 @@ function normalizeRow(row: Record<string, unknown>): Record<string, unknown> {
 }
 
 router.post("/bases/grade/upload", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
   if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
@@ -118,13 +119,15 @@ router.post("/bases/grade/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/grade/status", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const [s] = await db.select().from(baseGradeSnapshotsTable).orderBy(desc(baseGradeSnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/0111/upload", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
   if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
@@ -179,13 +182,15 @@ router.post("/bases/0111/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/0111/status", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const [s] = await db.select().from(base0111SnapshotsTable).orderBy(desc(base0111SnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/agendados/upload", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
   if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
@@ -253,13 +258,15 @@ router.post("/bases/agendados/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/agendados/status", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const [s] = await db.select().from(baseAgendadosSnapshotsTable).orderBy(desc(baseAgendadosSnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/exemplo/upload", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
   if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
@@ -294,13 +301,15 @@ router.post("/bases/exemplo/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/exemplo/status", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const [s] = await db.select().from(baseExemploSnapshotsTable).orderBy(desc(baseExemploSnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/020501/upload", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
   if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
@@ -357,13 +366,15 @@ router.post("/bases/020501/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/020501/status", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const [s] = await db.select().from(base020501SnapshotsTable).orderBy(desc(base020501SnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/020502/upload", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
   if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
@@ -407,13 +418,15 @@ router.post("/bases/020502/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/020502/status", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const [s] = await db.select().from(base020502SnapshotsTable).orderBy(desc(base020502SnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/producao/upload", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as { fileName?: string; fileBase64?: string; storagePath?: string; storageBucket?: string };
   if (!fileName || (!fileBase64 && !storagePath)) { res.status(400).json({ error: "fileName e fileBase64 obrigatórios" }); return; }
   let wb: XLSX.WorkBook;
@@ -444,13 +457,15 @@ router.post("/bases/producao/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/producao/status", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const [s] = await db.select().from(baseProducaoSnapshotsTable).orderBy(desc(baseProducaoSnapshotsTable.uploadedAt)).limit(1);
   res.json(s ? { fileName: s.fileName, uploadedAt: s.uploadedAt.toISOString(), totalRows: s.totalRows } : { fileName: null, uploadedAt: null, totalRows: null });
 });
 
 router.post("/bases/segmentos/upload", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
 
   const { fileName, fileBase64, storagePath, storageBucket } = req.body as {
     fileName?: string;
@@ -522,7 +537,8 @@ router.post("/bases/segmentos/upload", async (req, res): Promise<void> => {
 });
 
 router.get("/bases/segmentos/status", async (req, res): Promise<void> => {
-  if (!(await requireAdmin(req, res))) return;
+  
+  const db = getDb();
   const result = await db.execute(sql`SELECT COUNT(*)::int as total FROM produto_segmento`);
   const row = result.rows[0];
   const total = row ? Number((row as Record<string, unknown>).total ?? 0) : 0;
@@ -530,3 +546,4 @@ router.get("/bases/segmentos/status", async (req, res): Promise<void> => {
 });
 
 export default router;
+

@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db } from "@workspace/db";
+import { getDb } from "@workspace/db";
 import {
   baseGradeSnapshotsTable,
   base0111SnapshotsTable,
@@ -9,17 +9,30 @@ import { sql, desc } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-async function getLatestSnapshotId(table: typeof baseGradeSnapshotsTable): Promise<{ id: number; uploadedAt: Date } | null> {
-  const [snap] = await db.select().from(table).orderBy(desc(table.uploadedAt)).limit(1);
+async function getLatestSnapshotId(
+  table: typeof baseGradeSnapshotsTable,
+): Promise<{ id: number; uploadedAt: Date } | null> {
+  const db = getDb();
+  const [snap] = await db
+    .select()
+    .from(table)
+    .orderBy(desc(table.uploadedAt))
+    .limit(1);
   return snap ?? null;
 }
 
 async function getLatest0111Id(): Promise<number | null> {
-  const [snap] = await db.select({ id: base0111SnapshotsTable.id }).from(base0111SnapshotsTable).orderBy(desc(base0111SnapshotsTable.uploadedAt)).limit(1);
+  const db = getDb();
+  const [snap] = await db
+    .select({ id: base0111SnapshotsTable.id })
+    .from(base0111SnapshotsTable)
+    .orderBy(desc(base0111SnapshotsTable.uploadedAt))
+    .limit(1);
   return snap?.id ?? null;
 }
 
 router.get("/grade/consulta/segmentos", async (_req, res): Promise<void> => {
+  const db = getDb();
   const segmentos = await db
     .selectDistinct({ value: produtoSegmentoTable.segmento })
     .from(produtoSegmentoTable)
@@ -35,6 +48,7 @@ router.get("/grade/consulta/segmentos", async (_req, res): Promise<void> => {
 });
 
 router.get("/grade/consulta", async (req, res): Promise<void> => {
+  const db = getDb();
   const {
     search,
     status,
@@ -50,12 +64,18 @@ router.get("/grade/consulta", async (req, res): Promise<void> => {
 
   const gradeSnapshot = await getLatestSnapshotId(baseGradeSnapshotsTable);
   if (!gradeSnapshot) {
-    res.json({ items: [], total: 0, page: pageNum, limit: limitNum, totalPages: 0, snapshotDate: null });
+    res.json({
+      items: [],
+      total: 0,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: 0,
+      snapshotDate: null,
+    });
     return;
   }
 
   const dim0111Id = await getLatest0111Id();
-
   const searchTerm = search ? `%${search}%` : null;
 
   const result = await db.execute(sql`
@@ -138,9 +158,23 @@ router.get("/grade/consulta", async (req, res): Promise<void> => {
 });
 
 router.get("/grade/consulta/snapshot", async (_req, res): Promise<void> => {
-  const [snap] = await db.select().from(baseGradeSnapshotsTable).orderBy(desc(baseGradeSnapshotsTable.uploadedAt)).limit(1);
-  if (!snap) { res.json({ fileName: null, uploadedAt: null, totalRows: null }); return; }
-  res.json({ fileName: snap.fileName, uploadedAt: snap.uploadedAt.toISOString(), totalRows: snap.totalRows });
+  const db = getDb();
+  const [snap] = await db
+    .select()
+    .from(baseGradeSnapshotsTable)
+    .orderBy(desc(baseGradeSnapshotsTable.uploadedAt))
+    .limit(1);
+
+  if (!snap) {
+    res.json({ fileName: null, uploadedAt: null, totalRows: null });
+    return;
+  }
+
+  res.json({
+    fileName: snap.fileName,
+    uploadedAt: snap.uploadedAt.toISOString(),
+    totalRows: snap.totalRows,
+  });
 });
 
 export default router;

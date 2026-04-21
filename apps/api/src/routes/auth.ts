@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, adminUsersTable } from "@workspace/db";
+import { getDb, adminUsersTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import crypto from "crypto";
 import { getAuthenticatedAdmin } from "../lib/admin-auth";
@@ -18,7 +18,11 @@ function verifyPassword(password: string, hash: string): boolean {
 }
 
 router.post("/auth/login", async (req, res): Promise<void> => {
-  const { email, password } = req.body as { email?: string; password?: string };
+  const { email, password } = req.body as {
+    email?: string;
+    password?: string;
+  };
+  const db = getDb();
 
   if (!email || !password) {
     res.status(400).json({ error: "Email e senha sao obrigatorios" });
@@ -80,3 +84,4 @@ router.get("/auth/me", async (req, res): Promise<void> => {
 });
 
 export default router;
+
