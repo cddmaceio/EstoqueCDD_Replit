@@ -1,210 +1,269 @@
 import { Router, type IRouter } from "express";
-import {
-  getDb,
-  estoqueItemsTable,
-  uploadSnapshotsTable,
-} from "@workspace/db";
-import { eq, ilike, and, or, sql, desc } from "drizzle-orm";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { requireAdmin } from "../lib/admin-auth";
 
 const router: IRouter = Router();
 
-router.get("/estoque", async (req, res): Promise<void> => {
-  const db = getDb();
-  const {
-    search,
-    marca,
-    status,
-    curva,
-    page = "1",
-    limit = "20",
-  } = req.query as Record<string, string | undefined>;
+type SnapshotRow = {
+  id: number;
+  file_name: string;
+  uploaded_at: string;
+  total_rows: number;
+};
 
-  const pageNum = Math.max(1, parseInt(page ?? "1", 10));
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? "20", 10)));
-  const offset = (pageNum - 1) * limitNum;
+type EstoqueItemRow = {
+  id: number;
+  snapshot_id: number;
+  produto: string;
+  marca: string;
+  embalagem: string;
+  doi: number;
+  status: string;
+  demanda: number;
+  min: number;
+  max: number;
+  curva: string;
+};
 
-  const latestSnapshot = await db
-    .select()
-    .from(uploadSnapshotsTable)
-    .orderBy(desc(uploadSnapshotsTable.uploadedAt))
-    .limit(1);
+let supabaseClient: SupabaseClient | null = null;
 
-  if (latestSnapshot.length === 0) {
-    res.json({
-      items: [],
-      total: 0,
-      page: pageNum,
-      limit: limitNum,
-      totalPages: 0,
-    });
-    return;
+function getSupabaseReadClient(): SupabaseClient {
+  if (supabaseClient) {
+    return supabaseClient;
   }
 
-  const snapshotId = latestSnapshot[0].id;
-  const conditions = [eq(estoqueItemsTable.snapshotId, snapshotId)];
+  const supabaseUrl = process.env.SUPABASE_URL;
+  const serviceRoleKey =
+    process.env.SUPABASE_SERVICE_ROLE_KEY ?? process.env.SUPABASE_ANON_KEY;
 
-  if (search) {
-    conditions.push(
-      or(
-        ilike(estoqueItemsTable.produto, `%${search}%`),
-        ilike(estoqueItemsTable.marca, `%${search}%`),
-      )!,
+  if (!supabaseUrl || !serviceRoleKey) {
+    throw new Error(
+      "SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY (ou SUPABASE_ANON_KEY) sao obrigatorios para as rotas de estoque.",
     );
   }
 
-  if (marca) {
-    conditions.push(ilike(estoqueItemsTable.marca, marca));
-  }
-
-  if (status && (status === "OK" || status === "NOK")) {
-    conditions.push(eq(estoqueItemsTable.status, status));
-  }
-
-  if (curva && (curva === "A" || curva === "B" || curva === "C")) {
-    conditions.push(eq(estoqueItemsTable.curva, curva));
-  }
-
-  const whereClause = and(...conditions);
-
-  const [{ count }] = await db
-    .select({ count: sql<number>`count(*)::int` })
-    .from(estoqueItemsTable)
-    .where(whereClause);
-
-  const items = await db
-    .select()
-    .from(estoqueItemsTable)
-    .where(whereClause)
-    .orderBy(estoqueItemsTable.produto)
-    .limit(limitNum)
-    .offset(offset);
-
-  res.json({
-    items,
-    total: count,
-    page: pageNum,
-    limit: limitNum,
-    totalPages: Math.ceil(count / limitNum),
+  supabaseClient = createClient(supabaseUrl, serviceRoleKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
   });
+
+  return supabaseClient;
+}
+
+async function getLatestEstoqueSnapshot(): Promise<SnapshotRow | null> {
+  const { data, error } = await getSupabaseReadClient()
+    .from("upload_snapshots")
+    .select("id, file_name, uploaded_at, total_rows")
+    .order("uploaded_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) {
+    throw error;
+  }
+
+  return (data as SnapshotRow | null) ?? null;
+}
+
+async function getSnapshotItems(snapshotId: number): Promise<EstoqueItemRow[]> {
+  const { data, error } = await getSupabaseReadClient()
+    .from("estoque_items")
+    .select(
+      "id, snapshot_id, produto, marca, embalagem, doi, status, demanda, min, max, curva",
+    )
+    .eq("snapshot_id", snapshotId);
+
+  if (error) {
+    throw error;
+  }
+
+  return (data ?? []) as EstoqueItemRow[];
+}
+
+router.get("/estoque", async (req, res): Promise<void> => {
+  try {
+    const {
+      search,
+      marca,
+      status,
+      curva,
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string | undefined>;
+
+    const pageNum = Math.max(1, parseInt(page ?? "1", 10));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? "20", 10)));
+    const offset = (pageNum - 1) * limitNum;
+
+    const latestSnapshot = await getLatestEstoqueSnapshot();
+
+    if (!latestSnapshot) {
+      res.json({
+        items: [],
+        total: 0,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: 0,
+      });
+      return;
+    }
+
+    const normalizedSearch = search?.trim().toLowerCase() ?? "";
+    const normalizedMarca = marca?.trim().toLowerCase() ?? "";
+
+    const items = (await getSnapshotItems(latestSnapshot.id))
+      .filter((item) => {
+        if (normalizedSearch) {
+          const matchesSearch =
+            item.produto.toLowerCase().includes(normalizedSearch) ||
+            item.marca.toLowerCase().includes(normalizedSearch);
+
+          if (!matchesSearch) {
+            return false;
+          }
+        }
+
+        if (normalizedMarca && item.marca.toLowerCase() !== normalizedMarca) {
+          return false;
+        }
+
+        if (status && (status === "OK" || status === "NOK") && item.status !== status) {
+          return false;
+        }
+
+        if (curva && (curva === "A" || curva === "B" || curva === "C") && item.curva !== curva) {
+          return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => a.produto.localeCompare(b.produto, "pt-BR"));
+
+    const total = items.length;
+
+    res.json({
+      items: items.slice(offset, offset + limitNum),
+      total,
+      page: pageNum,
+      limit: limitNum,
+      totalPages: Math.ceil(total / limitNum),
+    });
+  } catch (error) {
+    req.log.error({ error, query: req.query }, "estoque consulta failed");
+    res.status(500).json({ error: "Falha ao carregar estoque" });
+  }
 });
 
-router.get("/estoque/marcas", async (_req, res): Promise<void> => {
-  const db = getDb();
-  const latestSnapshot = await db
-    .select()
-    .from(uploadSnapshotsTable)
-    .orderBy(desc(uploadSnapshotsTable.uploadedAt))
-    .limit(1);
+router.get("/estoque/marcas", async (req, res): Promise<void> => {
+  try {
+    const latestSnapshot = await getLatestEstoqueSnapshot();
 
-  if (latestSnapshot.length === 0) {
-    res.json({ marcas: [] });
-    return;
+    if (!latestSnapshot) {
+      res.json({ marcas: [] });
+      return;
+    }
+
+    const marcas = Array.from(
+      new Set((await getSnapshotItems(latestSnapshot.id)).map((item) => item.marca.trim())),
+    )
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, "pt-BR"));
+
+    res.json({ marcas });
+  } catch (error) {
+    req.log.error({ error }, "estoque marcas failed");
+    res.status(500).json({ error: "Falha ao carregar marcas" });
   }
-
-  const snapshotId = latestSnapshot[0].id;
-  const marcas = await db
-    .selectDistinct({ marca: estoqueItemsTable.marca })
-    .from(estoqueItemsTable)
-    .where(eq(estoqueItemsTable.snapshotId, snapshotId))
-    .orderBy(estoqueItemsTable.marca);
-
-  res.json({ marcas: marcas.map((m) => m.marca) });
 });
 
 router.get("/estoque/dashboard", async (req, res): Promise<void> => {
-  const db = getDb();
-  if (!(await requireAdmin(req, res))) return;
+  try {
+    if (!(await requireAdmin(req, res))) return;
 
-  const latestSnapshot = await db
-    .select()
-    .from(uploadSnapshotsTable)
-    .orderBy(desc(uploadSnapshotsTable.uploadedAt))
-    .limit(1);
+    const latestSnapshot = await getLatestEstoqueSnapshot();
 
-  if (latestSnapshot.length === 0) {
+    if (!latestSnapshot) {
+      res.json({
+        totalSKUs: 0,
+        percentOK: 0,
+        percentNOK: 0,
+        mediaDOI: 0,
+        distribuicaoStatus: [],
+        produtosPorMarca: [],
+        snapshotDate: null,
+      });
+      return;
+    }
+
+    const items = await getSnapshotItems(latestSnapshot.id);
+    const total = items.length;
+    const totalOK = items.filter((item) => item.status === "OK").length;
+    const totalNOK = items.filter((item) => item.status === "NOK").length;
+    const mediaDOI =
+      total > 0
+        ? items.reduce((sum, item) => sum + Number(item.doi ?? 0), 0) / total
+        : 0;
+
+    const produtosPorMarca = Array.from(
+      items.reduce((acc, item) => {
+        const current = acc.get(item.marca) ?? 0;
+        acc.set(item.marca, current + 1);
+        return acc;
+      }, new Map<string, number>()),
+    )
+      .map(([marca, totalPorMarca]) => ({
+        marca,
+        total: totalPorMarca,
+        curva:
+          total > 0 && totalPorMarca >= total * 0.2
+            ? "A"
+            : total > 0 && totalPorMarca >= total * 0.1
+              ? "B"
+              : "C",
+      }))
+      .sort((a, b) => b.total - a.total)
+      .slice(0, 20);
+
     res.json({
-      totalSKUs: 0,
-      percentOK: 0,
-      percentNOK: 0,
-      mediaDOI: 0,
-      distribuicaoStatus: [],
-      produtosPorMarca: [],
-      snapshotDate: null,
+      totalSKUs: total,
+      percentOK: total > 0 ? Math.round((totalOK / total) * 100) : 0,
+      percentNOK: total > 0 ? Math.round((totalNOK / total) * 100) : 0,
+      mediaDOI: total > 0 ? Math.round(mediaDOI * 10) / 10 : 0,
+      distribuicaoStatus: [
+        { name: "OK", value: totalOK },
+        { name: "NOK", value: totalNOK },
+      ],
+      produtosPorMarca,
+      snapshotDate: latestSnapshot.uploaded_at,
     });
-    return;
+  } catch (error) {
+    req.log.error({ error }, "estoque dashboard failed");
+    res.status(500).json({ error: "Falha ao carregar dashboard" });
   }
-
-  const snapshot = latestSnapshot[0];
-  const snapshotId = snapshot.id;
-
-  const [totals] = await db
-    .select({
-      total: sql<number>`count(*)::int`,
-      totalOK: sql<number>`sum(case when status = 'OK' then 1 else 0 end)::int`,
-      totalNOK: sql<number>`sum(case when status = 'NOK' then 1 else 0 end)::int`,
-      mediaDOI: sql<number>`avg(doi)::float`,
-    })
-    .from(estoqueItemsTable)
-    .where(eq(estoqueItemsTable.snapshotId, snapshotId));
-
-  const total = totals.total ?? 0;
-  const totalOK = totals.totalOK ?? 0;
-  const totalNOK = totals.totalNOK ?? 0;
-
-  const produtosPorMarca = await db
-    .select({
-      marca: estoqueItemsTable.marca,
-      total: sql<number>`count(*)::int`,
-      curva: sql<string>`
-        case
-          when count(*) >= (select count(*) * 0.2 from estoque_items where snapshot_id = ${snapshotId}) then 'A'
-          when count(*) >= (select count(*) * 0.1 from estoque_items where snapshot_id = ${snapshotId}) then 'B'
-          else 'C'
-        end
-      `,
-    })
-    .from(estoqueItemsTable)
-    .where(eq(estoqueItemsTable.snapshotId, snapshotId))
-    .groupBy(estoqueItemsTable.marca)
-    .orderBy(sql`count(*) desc`)
-    .limit(20);
-
-  res.json({
-    totalSKUs: total,
-    percentOK: total > 0 ? Math.round((totalOK / total) * 100) : 0,
-    percentNOK: total > 0 ? Math.round((totalNOK / total) * 100) : 0,
-    mediaDOI: totals.mediaDOI ? Math.round(totals.mediaDOI * 10) / 10 : 0,
-    distribuicaoStatus: [
-      { name: "OK", value: totalOK },
-      { name: "NOK", value: totalNOK },
-    ],
-    produtosPorMarca,
-    snapshotDate: snapshot.uploadedAt.toISOString(),
-  });
 });
 
 router.get("/estoque/upload-status", async (req, res): Promise<void> => {
-  const db = getDb();
-  if (!(await requireAdmin(req, res))) return;
+  try {
+    if (!(await requireAdmin(req, res))) return;
 
-  const latestSnapshot = await db
-    .select()
-    .from(uploadSnapshotsTable)
-    .orderBy(desc(uploadSnapshotsTable.uploadedAt))
-    .limit(1);
+    const latestSnapshot = await getLatestEstoqueSnapshot();
 
-  if (latestSnapshot.length === 0) {
-    res.json({ fileName: null, uploadedAt: null, totalRows: null });
-    return;
+    if (!latestSnapshot) {
+      res.json({ fileName: null, uploadedAt: null, totalRows: null });
+      return;
+    }
+
+    res.json({
+      fileName: latestSnapshot.file_name,
+      uploadedAt: latestSnapshot.uploaded_at,
+      totalRows: latestSnapshot.total_rows,
+    });
+  } catch (error) {
+    req.log.error({ error }, "estoque upload status failed");
+    res.status(500).json({ error: "Falha ao carregar status do upload" });
   }
-
-  const snapshot = latestSnapshot[0];
-  res.json({
-    fileName: snapshot.fileName,
-    uploadedAt: snapshot.uploadedAt.toISOString(),
-    totalRows: snapshot.totalRows,
-  });
 });
 
 export default router;
