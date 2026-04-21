@@ -19,9 +19,41 @@ function getDatabaseUrl() {
   return databaseUrl;
 }
 
+function shouldUseSsl(databaseUrl: string): boolean {
+  try {
+    const url = new URL(databaseUrl);
+    const host = url.hostname.toLowerCase();
+
+    if (host === "localhost" || host === "127.0.0.1") {
+      return false;
+    }
+
+    if (url.searchParams.get("sslmode") === "disable") {
+      return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function getPool() {
   if (!poolInstance) {
-    poolInstance = new Pool({ connectionString: getDatabaseUrl() });
+    const databaseUrl = getDatabaseUrl();
+
+    poolInstance = new Pool({
+      connectionString: databaseUrl,
+      ssl: shouldUseSsl(databaseUrl)
+        ? {
+            rejectUnauthorized: false,
+          }
+        : undefined,
+      max: process.env.VERCEL ? 1 : 10,
+      idleTimeoutMillis: 30_000,
+      connectionTimeoutMillis: 10_000,
+      allowExitOnIdle: true,
+    });
   }
 
   return poolInstance;

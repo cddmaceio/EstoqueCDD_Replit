@@ -32,149 +32,164 @@ async function getLatest0111Id(): Promise<number | null> {
 }
 
 router.get("/grade/consulta/segmentos", async (_req, res): Promise<void> => {
-  const db = getDb();
-  const segmentos = await db
-    .selectDistinct({ value: produtoSegmentoTable.segmento })
-    .from(produtoSegmentoTable)
-    .where(sql`${produtoSegmentoTable.segmento} <> ''`)
-    .orderBy(produtoSegmentoTable.segmento);
+  try {
+    const db = getDb();
+    const segmentos = await db
+      .selectDistinct({ value: produtoSegmentoTable.segmento })
+      .from(produtoSegmentoTable)
+      .where(sql`${produtoSegmentoTable.segmento} <> ''`)
+      .orderBy(produtoSegmentoTable.segmento);
 
-  res.json({
-    segmentos: segmentos.map(({ value }) => ({
-      value,
-      label: value,
-    })),
-  });
+    res.json({
+      segmentos: segmentos.map(({ value }) => ({
+        value,
+        label: value,
+      })),
+    });
+  } catch (error) {
+    _req.log.error({ error }, "grade segmentos query failed");
+    res.status(500).json({ error: "Falha ao carregar segmentos" });
+  }
 });
 
 router.get("/grade/consulta", async (req, res): Promise<void> => {
-  const db = getDb();
-  const {
-    search,
-    status,
-    segmento,
-    curva,
-    page = "1",
-    limit = "20",
-  } = req.query as Record<string, string | undefined>;
+  try {
+    const db = getDb();
+    const {
+      search,
+      status,
+      segmento,
+      curva,
+      page = "1",
+      limit = "20",
+    } = req.query as Record<string, string | undefined>;
 
-  const pageNum = Math.max(1, parseInt(page ?? "1", 10));
-  const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? "20", 10)));
-  const offset = (pageNum - 1) * limitNum;
+    const pageNum = Math.max(1, parseInt(page ?? "1", 10));
+    const limitNum = Math.min(100, Math.max(1, parseInt(limit ?? "20", 10)));
+    const offset = (pageNum - 1) * limitNum;
 
-  const gradeSnapshot = await getLatestSnapshotId(baseGradeSnapshotsTable);
-  if (!gradeSnapshot) {
+    const gradeSnapshot = await getLatestSnapshotId(baseGradeSnapshotsTable);
+    if (!gradeSnapshot) {
+      res.json({
+        items: [],
+        total: 0,
+        page: pageNum,
+        limit: limitNum,
+        totalPages: 0,
+        snapshotDate: null,
+      });
+      return;
+    }
+
+    const dim0111Id = await getLatest0111Id();
+    const searchTerm = search ? `%${search}%` : null;
+
+    const result = await db.execute(sql`
+      WITH grade_with_curva AS (
+        SELECT
+          g.id,
+          g.codigo_produto,
+          g.descricao_produto,
+          g.unidade_medida,
+          g.grade_estoque,
+          g.grade_cadastrada,
+          g.reserva,
+          g.saida,
+          g.saldo_disponivel,
+          CASE
+            WHEN PERCENT_RANK() OVER (ORDER BY g.grade_cadastrada DESC) < 0.20 THEN 'A'
+            WHEN PERCENT_RANK() OVER (ORDER BY g.grade_cadastrada DESC) < 0.50 THEN 'B'
+            ELSE 'C'
+          END AS curva
+        FROM base_grade g
+        WHERE g.snapshot_id = ${gradeSnapshot.id}
+      ),
+      joined AS (
+        SELECT
+          gc.*,
+          COALESCE(p.embalagem, '')          AS embalagem,
+          COALESCE(p.tipo_marca, '')         AS tipo_marca,
+          COALESCE(p.codigo_produto_sap, '') AS codigo_produto_sap,
+          COALESCE(ps.segmento, '')          AS segmento
+        FROM grade_with_curva gc
+        LEFT JOIN base_0111 p
+          ON p.codigo::bigint = gc.codigo_produto
+          ${dim0111Id ? sql`AND p.snapshot_id = ${dim0111Id}` : sql``}
+        LEFT JOIN produto_segmento ps
+          ON ps.codigo_produto = gc.codigo_produto
+      ),
+      filtered AS (
+        SELECT * FROM joined
+        WHERE 1=1
+          ${searchTerm ? sql`AND (descricao_produto ILIKE ${searchTerm} OR codigo_produto::text ILIKE ${searchTerm})` : sql``}
+          ${status === "disponivel" ? sql`AND saldo_disponivel > 0` : sql``}
+          ${status === "ruptura" ? sql`AND saldo_disponivel <= 0` : sql``}
+          ${segmento ? sql`AND segmento = ${segmento}` : sql``}
+          ${curva ? sql`AND curva = ${curva}` : sql``}
+      )
+      SELECT *, COUNT(*) OVER () AS total_count
+      FROM filtered
+      ORDER BY descricao_produto
+      LIMIT ${limitNum} OFFSET ${offset}
+    `);
+
+    const rows = result.rows as Record<string, unknown>[];
+    const total = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
+
+    const items = rows.map((r) => ({
+      id: r.id,
+      codigoProduto: r.codigo_produto,
+      descricaoProduto: r.descricao_produto,
+      unidadeMedida: r.unidade_medida,
+      gradeEstoque: r.grade_estoque,
+      gradeCadastrada: r.grade_cadastrada,
+      reserva: r.reserva,
+      saida: r.saida,
+      saldoDisponivel: r.saldo_disponivel,
+      curva: r.curva,
+      embalagem: r.embalagem || null,
+      tipoMarca: r.tipo_marca || null,
+      codigoProdutoSap: r.codigo_produto_sap || null,
+      segmento: r.segmento || null,
+    }));
+
     res.json({
-      items: [],
-      total: 0,
+      items,
+      total,
       page: pageNum,
       limit: limitNum,
-      totalPages: 0,
-      snapshotDate: null,
+      totalPages: Math.ceil(total / limitNum),
+      snapshotDate: gradeSnapshot.uploadedAt.toISOString(),
     });
-    return;
+  } catch (error) {
+    req.log.error({ error, query: req.query }, "grade consulta query failed");
+    res.status(500).json({ error: "Falha ao carregar consulta de grade" });
   }
-
-  const dim0111Id = await getLatest0111Id();
-  const searchTerm = search ? `%${search}%` : null;
-
-  const result = await db.execute(sql`
-    WITH grade_with_curva AS (
-      SELECT
-        g.id,
-        g.codigo_produto,
-        g.descricao_produto,
-        g.unidade_medida,
-        g.grade_estoque,
-        g.grade_cadastrada,
-        g.reserva,
-        g.saida,
-        g.saldo_disponivel,
-        CASE
-          WHEN PERCENT_RANK() OVER (ORDER BY g.grade_cadastrada DESC) < 0.20 THEN 'A'
-          WHEN PERCENT_RANK() OVER (ORDER BY g.grade_cadastrada DESC) < 0.50 THEN 'B'
-          ELSE 'C'
-        END AS curva
-      FROM base_grade g
-      WHERE g.snapshot_id = ${gradeSnapshot.id}
-    ),
-    joined AS (
-      SELECT
-        gc.*,
-        COALESCE(p.embalagem, '')          AS embalagem,
-        COALESCE(p.tipo_marca, '')         AS tipo_marca,
-        COALESCE(p.codigo_produto_sap, '') AS codigo_produto_sap,
-        COALESCE(ps.segmento, '')          AS segmento
-      FROM grade_with_curva gc
-      LEFT JOIN base_0111 p
-        ON p.codigo::bigint = gc.codigo_produto
-        ${dim0111Id ? sql`AND p.snapshot_id = ${dim0111Id}` : sql``}
-      LEFT JOIN produto_segmento ps
-        ON ps.codigo_produto = gc.codigo_produto
-    ),
-    filtered AS (
-      SELECT * FROM joined
-      WHERE 1=1
-        ${searchTerm ? sql`AND (descricao_produto ILIKE ${searchTerm} OR codigo_produto::text ILIKE ${searchTerm})` : sql``}
-        ${status === "disponivel" ? sql`AND saldo_disponivel > 0` : sql``}
-        ${status === "ruptura" ? sql`AND saldo_disponivel <= 0` : sql``}
-        ${segmento ? sql`AND segmento = ${segmento}` : sql``}
-        ${curva ? sql`AND curva = ${curva}` : sql``}
-    )
-    SELECT *, COUNT(*) OVER () AS total_count
-    FROM filtered
-    ORDER BY descricao_produto
-    LIMIT ${limitNum} OFFSET ${offset}
-  `);
-
-  const rows = result.rows as Record<string, unknown>[];
-  const total = rows.length > 0 ? Number(rows[0].total_count ?? 0) : 0;
-
-  const items = rows.map((r) => ({
-    id: r.id,
-    codigoProduto: r.codigo_produto,
-    descricaoProduto: r.descricao_produto,
-    unidadeMedida: r.unidade_medida,
-    gradeEstoque: r.grade_estoque,
-    gradeCadastrada: r.grade_cadastrada,
-    reserva: r.reserva,
-    saida: r.saida,
-    saldoDisponivel: r.saldo_disponivel,
-    curva: r.curva,
-    embalagem: r.embalagem || null,
-    tipoMarca: r.tipo_marca || null,
-    codigoProdutoSap: r.codigo_produto_sap || null,
-    segmento: r.segmento || null,
-  }));
-
-  res.json({
-    items,
-    total,
-    page: pageNum,
-    limit: limitNum,
-    totalPages: Math.ceil(total / limitNum),
-    snapshotDate: gradeSnapshot.uploadedAt.toISOString(),
-  });
 });
 
 router.get("/grade/consulta/snapshot", async (_req, res): Promise<void> => {
-  const db = getDb();
-  const [snap] = await db
-    .select()
-    .from(baseGradeSnapshotsTable)
-    .orderBy(desc(baseGradeSnapshotsTable.uploadedAt))
-    .limit(1);
+  try {
+    const db = getDb();
+    const [snap] = await db
+      .select()
+      .from(baseGradeSnapshotsTable)
+      .orderBy(desc(baseGradeSnapshotsTable.uploadedAt))
+      .limit(1);
 
-  if (!snap) {
-    res.json({ fileName: null, uploadedAt: null, totalRows: null });
-    return;
+    if (!snap) {
+      res.json({ fileName: null, uploadedAt: null, totalRows: null });
+      return;
+    }
+
+    res.json({
+      fileName: snap.fileName,
+      uploadedAt: snap.uploadedAt.toISOString(),
+      totalRows: snap.totalRows,
+    });
+  } catch (error) {
+    _req.log.error({ error }, "grade snapshot query failed");
+    res.status(500).json({ error: "Falha ao carregar snapshot da grade" });
   }
-
-  res.json({
-    fileName: snap.fileName,
-    uploadedAt: snap.uploadedAt.toISOString(),
-    totalRows: snap.totalRows,
-  });
 });
 
 export default router;
